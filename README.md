@@ -1,25 +1,35 @@
-# AWS FinOpsSec Governance Agent
+# AWS Serverless ERP Receiving Platform
 
-一個以履歷與期末專題為目標的 AWS 成本暨資安治理 Agent。它會用唯讀權限收集 AWS
-資源中繼資料、執行可重現的治理規則、顯示證據，並產生需要人工核准的修復計畫。
+AWS Serverless ERP 物料點收管理平台，將採購單、到貨驗收、異常判斷與庫存異動串成可追蹤流程。這個專案以履歷展示為目標，先提供可執行的本機 MVP，再逐步接上 AWS 託管服務。
 
-目前版本是第一個可執行的 MVP：包含 Demo 資料、真實 AWS 唯讀掃描、Web Dashboard、
-Bedrock 摘要、FAISS 多來源政策知識庫、MCP 工具入口、Lambda 容器與 Terraform。它不會修改
-或刪除 AWS 資源。
+## 核心流程
 
-## 已支援的規則
+```text
+採購單 -> 到貨驗收 -> 短缺／超收判斷 -> 庫存更新 -> Dashboard 查詢
+```
 
-| Rule ID | 類型 | 檢查內容 |
-| --- | --- | --- |
-| `SEC-SG-001` | Security | 敏感連接埠對 `0.0.0.0/0` 或 `::/0` 開放 |
-| `SEC-S3-001` | Security | S3 Block Public Access 未完整啟用 |
-| `SEC-IAM-001` | Security | 客戶管理 Policy 同時允許 `Action:*` 與 `Resource:*` |
-| `COST-EIP-001` | Cost | Elastic IP 未附加 |
-| `COST-EBS-001` | Cost | EBS Volume 處於 `available` 狀態 |
-| `GOV-LOG-001` | Governance | CloudWatch Log Group 沒有保存期限 |
+目前 Demo 支援：
 
-費用數字是治理用估算，不是 AWS 帳單。EBS 目前使用 US$0.08/GiB-month 作為基準，之後會接
-AWS Pricing API 依區域計算。
+- 採購單與供應商資料
+- 待驗收、已完成、有異常狀態
+- 實際收料數量與採購數量比對
+- 短缺與超收異常訊息
+- 庫存與安全庫存判斷
+- ERP Dashboard 與 API 文件
+
+## AWS 架構目標
+
+```text
+CloudFront -> S3 Frontend -> API Gateway -> Lambda
+                                             |
+                              DynamoDB: PurchaseOrders / Receipts / Inventory
+                                             |
+                              S3 -> SQS -> Lambda: Excel 匯入流程
+                                             |
+                                      CloudWatch: Logs / Alarms
+```
+
+Terraform 與 Docker 已保留為部署基礎。下一階段會將目前的 in-memory Demo Store 替換成 DynamoDB，並加入私有 S3、Pre-signed URL、SQS 重試、Cognito 權限與 CloudFront。
 
 ## 本機啟動
 
@@ -32,90 +42,28 @@ python -m pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 ```
 
-開啟 <http://127.0.0.1:8000>，選擇 `Demo 資料` 後執行掃描。API 文件位於
-<http://127.0.0.1:8000/docs>。
+開啟 <http://127.0.0.1:8000>，API 文件位於 <http://127.0.0.1:8000/docs>。
 
-## 掃描真實 AWS 帳號
+## API
 
-先使用 AWS CLI profile 或環境變數提供憑證，再把介面模式切換成 `真實 AWS 帳號`。掃描器目前
-只呼叫 `List`、`Get` 與 `Describe` 類型 API。Terraform 內的 Lambda Role 也只授予唯讀掃描權限。
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/dashboard` | ERP KPI 摘要 |
+| GET | `/api/purchase-orders` | 查詢採購單 |
+| POST | `/api/purchase-orders` | 建立採購單 |
+| POST | `/api/receipts` | 送出驗收並更新庫存 |
+| GET | `/api/inventory` | 查詢庫存 |
 
-Windows 可以使用啟動腳本，自動找到使用者層級的 AWS CLI、驗證登入並設定環境變數：
-
-```powershell
-.\scripts\start-real-scan.ps1
-```
-
-若個人練習帳號目前只有 root 短期登入，可在一次性的唯讀測試中明確允許；正式部署前必須改成
-非 root 身分：
+## 測試與部署
 
 ```powershell
-.\scripts\start-real-scan.ps1 -AllowRootSession
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m pytest
+docker build --platform linux/amd64 -t erp-receiving-platform .
 ```
 
-```powershell
-$env:AWS_PROFILE = "your-profile"
-$env:AWS_REGION = "ap-northeast-1"
-$env:ALLOW_AWS_SCAN = "true"
-uvicorn app.main:app --reload
-```
+Lambda Container、API Gateway 與 IAM 的 Terraform 設定位於 `infra/`。部署前請先將映像推送至 ECR，再以 `terraform -chdir=infra apply -var="image_uri=..."` 建立資源。
 
-若要啟用 Bedrock 主管摘要：
+## 履歷描述
 
-```powershell
-$env:BEDROCK_MODEL_ID = "jp.amazon.nova-2-lite-v1:0"
-```
-
-沒有設定模型或模型呼叫失敗時，系統會使用確定性的本機摘要，掃描不會中斷。
-
-Terraform 部署預設將 `ALLOW_AWS_SCAN` 設為 `false`，因此公開端點只能使用 Demo
-資料。加入 Cognito 或其他身分驗證前，不應在公開 API 啟用真實帳號掃描。
-
-## MCP Server
-
-MCP Server 預設使用 stdio，提供 `scan_aws_governance` 與 `propose_remediation` 兩個工具：
-
-```powershell
-python -m app.mcp_server
-```
-
-AI IDE 的 MCP 設定可指向專案虛擬環境中的 Python：
-
-```json
-{
-  "mcpServers": {
-    "finopssec": {
-      "command": "C:\\absolute\\path\\to\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "app.mcp_server"],
-      "cwd": "C:\\absolute\\path\\to\\project"
-    }
-  }
-}
-```
-
-## 測試
-
-```powershell
-ruff check .
-pytest
-```
-
-## 部署輪廓
-
-`Dockerfile` 會建立 Lambda container image。推送到 ECR 後，將映像 URI 傳入 Terraform：
-
-```powershell
-terraform -chdir=infra init
-terraform -chdir=infra apply -var="image_uri=ACCOUNT.dkr.ecr.REGION.amazonaws.com/finopssec-agent:TAG"
-```
-
-Terraform 會建立 Lambda、唯讀 IAM Role 與 API Gateway HTTP API。正式部署前應使用 immutable
-image digest、設定 AWS Budget，並依帳號資源縮小 IAM Resource 範圍。
-
-## 下一個里程碑
-
-1. DynamoDB 保存掃描、核准與稽核紀錄。
-2. 加入 Step Functions human-in-the-loop 流程。
-3. 產生 Terraform remediation branch 與 GitHub Pull Request。
-4. 經核准後執行白名單動作，並重新掃描驗證。
-5. 加入 20 個錯誤設定案例、偵測率、誤報率、Token 與成本 Dashboard。
+> 建置 AWS Serverless ERP 物料點收平台，整合採購單、到貨驗收、異常判斷、庫存更新與營運 Dashboard；使用 FastAPI、Lambda Container、API Gateway、DynamoDB 設計可追蹤的收料流程，並以 Terraform 與 GitHub Actions 管理雲端基礎設施與 CI/CD。

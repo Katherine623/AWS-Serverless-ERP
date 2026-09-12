@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Resource name prefix."
   type        = string
-  default     = "finopssec-agent"
+  default     = "erp-receiving-platform"
 }
 
 variable "image_uri" {

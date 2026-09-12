@@ -35,61 +35,6 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-resource "aws_iam_role_policy" "scanner" {
-  name = "${var.project_name}-read-only-scanner"
-  role = aws_iam_role.lambda.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "ReadRegionalInventory"
-        Effect = "Allow"
-        Action = [
-          "ec2:DescribeAddresses",
-          "ec2:DescribeSecurityGroups",
-          "ec2:DescribeVolumes",
-          "logs:DescribeLogGroups"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "ReadS3Governance"
-        Effect = "Allow"
-        Action = [
-          "s3:GetBucketLocation",
-          "s3:GetBucketPublicAccessBlock",
-          "s3:ListAllMyBuckets"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "ReadCustomerManagedPolicies"
-        Effect = "Allow"
-        Action = [
-          "iam:GetPolicyVersion",
-          "iam:ListPolicies"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid      = "ReadIdentity"
-        Effect   = "Allow"
-        Action   = "sts:GetCallerIdentity"
-        Resource = "*"
-      },
-      {
-        Sid    = "OptionalBedrockSummary"
-        Effect = "Allow"
-        Action = [
-          "bedrock:InvokeModel"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
 resource "aws_lambda_function" "api" {
   function_name = var.project_name
   role          = aws_iam_role.lambda.arn
@@ -101,9 +46,7 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      ALLOW_AWS_SCAN         = "false"
       AWS_ACCOUNT_ID         = data.aws_caller_identity.current.account_id
-      BEDROCK_MODEL_ID       = var.bedrock_model_id
       POWERTOOLS_SERVICE_NAME = var.project_name
     }
   }

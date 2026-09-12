@@ -9,21 +9,34 @@ def test_health() -> None:
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert response.json()["service"] == "erp-receiving-platform"
 
 
-def test_demo_scan() -> None:
-    response = client.post("/api/scans", json={"mode": "demo", "region": "ap-northeast-1"})
+def test_dashboard_contains_erp_metrics() -> None:
+    response = client.get("/api/dashboard")
 
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["mode"] == "demo"
-    assert payload["summary"]["total_findings"] == 6
-    assert payload["summary"]["governance_score"] == 24
+    assert response.json()["total_purchase_orders"] == 2
+    assert response.json()["inventory_item_count"] == 3
 
 
-def test_real_aws_scan_is_disabled_by_default() -> None:
-    response = client.post("/api/scans", json={"mode": "aws", "region": "ap-northeast-1"})
+def test_receiving_shortage_creates_exception_and_updates_inventory() -> None:
+    response = client.post(
+        "/api/receipts",
+        json={
+            "po_id": "PO-2026-001",
+            "received_by": "test-warehouse",
+            "items": [
+                {"material_id": "MAT-1001", "received_quantity": 80},
+                {"material_id": "MAT-1002", "received_quantity": 50},
+            ],
+        },
+    )
 
-    assert response.status_code == 403
-    assert "ALLOW_AWS_SCAN" in response.json()["detail"]
+    assert response.status_code == 201
+    assert response.json()["status"] == "有異常"
+    assert any("短缺 20 pcs" in item for item in response.json()["exceptions"])
+
+    inventory = client.get("/api/inventory").json()
+    bearing = next(item for item in inventory if item["material_id"] == "MAT-1001")
+    assert bearing["quantity"] == 500

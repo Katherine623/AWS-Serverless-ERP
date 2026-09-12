@@ -1,7 +1,7 @@
 [project]
-name = "aws-finopssec-governance-agent"
+name = "aws-serverless-erp-receiving-platform"
 version = "0.1.0"
-description = "Serverless AWS cost and security governance agent"
+description = "Serverless ERP purchase, receiving and inventory platform"
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]

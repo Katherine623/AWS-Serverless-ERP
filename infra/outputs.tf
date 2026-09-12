@@ -4,7 +4,7 @@ output "api_url" {
 }
 
 output "lambda_role_arn" {
-  description = "Read-only scanner role for IAM review."
+  description = "Lambda execution role for the ERP API."
   value       = aws_iam_role.lambda.arn
 }
 
