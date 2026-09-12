@@ -1,0 +1,18 @@
+[project]
+name = "aws-finopssec-governance-agent"
+version = "0.1.0"
+description = "Serverless AWS cost and security governance agent"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q -p no:cacheprovider"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", ".uv-cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

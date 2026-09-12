@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AWS FinOpsSec Governance Agent</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #07111f;
+        --panel: #0e1b2d;
+        --panel-soft: #13243b;
+        --text: #e8f0fb;
+        --muted: #91a4bd;
+        --accent: #46d6b4;
+        --critical: #ff5d73;
+        --high: #ff8e53;
+        --medium: #f3c969;
+        --low: #75b9ff;
+        --border: rgba(145, 164, 189, 0.18);
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at 10% -10%, rgba(70, 214, 180, 0.15), transparent 35rem),
+          radial-gradient(circle at 100% 0%, rgba(78, 121, 255, 0.14), transparent 34rem),
+          var(--bg);
+        color: var(--text);
+      }
+
+      main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 52px 0 80px; }
+      header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-end; }
+      .eyebrow { color: var(--accent); font-weight: 700; letter-spacing: .12em; font-size: 12px; }
+      h1 { margin: 9px 0 8px; font-size: clamp(28px, 5vw, 50px); letter-spacing: -.04em; }
+      .subtitle { margin: 0; color: var(--muted); max-width: 650px; line-height: 1.65; }
+      .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      select, button {
+        border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px;
+        font: inherit; color: var(--text); background: var(--panel-soft);
+      }
+      button { background: var(--accent); color: #03251e; border: 0; font-weight: 800; cursor: pointer; }
+      button:disabled { opacity: .6; cursor: wait; }
+      .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 36px 0 14px; }
+      .card, .finding, .analysis, .empty {
+        background: linear-gradient(145deg, rgba(19,36,59,.96), rgba(14,27,45,.96));
+        border: 1px solid var(--border); border-radius: 16px;
+      }
+      .card { padding: 19px; }
+      .label { color: var(--muted); font-size: 13px; }
+      .metric { display: block; margin-top: 8px; font-size: 28px; font-weight: 800; }
+      .analysis { padding: 20px 22px; margin-bottom: 24px; line-height: 1.65; }
+      .analysis strong { color: var(--accent); }
+      .toolbar { display: flex; justify-content: space-between; align-items: center; margin: 28px 0 12px; }
+      .toolbar h2 { margin: 0; font-size: 20px; }
+      #findings { display: grid; gap: 12px; }
+      .finding { padding: 19px 20px; display: grid; grid-template-columns: 104px 1fr auto; gap: 18px; align-items: start; }
+      .badge { display: inline-flex; justify-content: center; padding: 5px 8px; border-radius: 999px; font-size: 11px; font-weight: 900; text-transform: uppercase; }
+      .critical { color: var(--critical); background: rgba(255,93,115,.12); }
+      .high { color: var(--high); background: rgba(255,142,83,.12); }
+      .medium { color: var(--medium); background: rgba(243,201,105,.12); }
+      .low { color: var(--low); background: rgba(117,185,255,.12); }
+      .finding h3 { margin: 0 0 7px; font-size: 16px; }
+      .finding p { margin: 0; color: var(--muted); line-height: 1.55; }
+      .resource { margin-top: 9px; font-family: ui-monospace, monospace; font-size: 12px; color: #b7c9dd; overflow-wrap: anywhere; }
+      .saving { color: var(--accent); white-space: nowrap; font-weight: 800; }
+      .plan-btn { margin-top: 12px; padding: 8px 11px; font-size: 12px; background: transparent; color: var(--accent); border: 1px solid rgba(70,214,180,.35); }
+      dialog { width: min(640px, calc(100% - 32px)); color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 24px; }
+      dialog::backdrop { background: rgba(0,0,0,.72); }
+      dialog h2 { margin-top: 0; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; background: #07111f; border-radius: 10px; color: #c8d8e9; }
+      .dialog-actions { display: flex; justify-content: flex-end; }
+      .empty { padding: 30px; text-align: center; color: var(--muted); }
+      .error { color: var(--critical); }
+      @media (max-width: 760px) {
+        header { align-items: flex-start; flex-direction: column; }
+        .summary-grid { grid-template-columns: repeat(2, 1fr); }
+        .finding { grid-template-columns: 85px 1fr; }
+        .saving { grid-column: 2; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <div class="eyebrow">AWS GOVERNANCE / AI AGENT</div>
+          <h1>FinOpsSec Governance Agent</h1>
+          <p class="subtitle">掃描 AWS 成本與資安風險，產生附證據、需要人工核准的修復計畫。</p>
+        </div>
+        <div class="controls">
+          <select id="mode" aria-label="掃描模式">
+            <option value="demo">Demo 資料</option>
+            <option value="aws">真實 AWS 帳號</option>
+          </select>
+          <select id="region" aria-label="AWS 區域">
+            <option value="ap-northeast-1">Tokyo</option>
+            <option value="ap-northeast-3">Osaka</option>
+            <option value="ap-southeast-1">Singapore</option>
+            <option value="us-east-1">N. Virginia</option>
+          </select>
+          <button id="scan">開始掃描</button>
+        </div>
+      </header>
+
+      <section class="summary-grid" aria-label="掃描摘要">
+        <div class="card"><span class="label">治理分數</span><span class="metric" id="score">—</span></div>
+        <div class="card"><span class="label">發現問題</span><span class="metric" id="total">—</span></div>
+        <div class="card"><span class="label">Critical / High</span><span class="metric" id="urgent">—</span></div>
+        <div class="card"><span class="label">預估每月節省</span><span class="metric" id="savings">—</span></div>
+      </section>
+
+      <section class="analysis"><strong>Agent 摘要：</strong> <span id="analysis">尚未執行掃描。</span></section>
+      <section id="errors"></section>
+      <div class="toolbar"><h2>治理發現</h2><span class="label" id="scanMeta"></span></div>
+      <section id="findings"><div class="empty">按下「開始掃描」查看結果。</div></section>
+    </main>
+
+    <dialog id="planDialog">
+      <h2>修復計畫</h2>
+      <p id="planSummary"></p>
+      <pre id="planBody"></pre>
+      <p class="label">此版本只產生計畫，不會修改 AWS。後續版本將加入人工核准與執行紀錄。</p>
+      <div class="dialog-actions"><button id="closeDialog">關閉</button></div>
+    </dialog>
+
+    <script>
+      const state = { findings: [] };
+      const el = id => document.getElementById(id);
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>'"]/g, char => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+        })[char]);
+      }
+
+      function render(report) {
+        const summary = report.summary;
+        state.findings = report.findings;
+        el('score').textContent = `${summary.governance_score}/100`;
+        el('total').textContent = summary.total_findings;
+        el('urgent').textContent = `${summary.by_severity.critical} / ${summary.by_severity.high}`;
+        el('savings').textContent = `US$${summary.estimated_monthly_savings_usd.toFixed(2)}`;
+        el('analysis').textContent = report.executive_summary;
+        el('scanMeta').textContent = `${report.mode.toUpperCase()} · ${report.region} · ${report.scan_id}`;
+        el('errors').innerHTML = report.collection_errors.length
+          ? `<div class="analysis error"><strong>部分 AWS 資料無法讀取：</strong><br>${report.collection_errors.map(escapeHtml).join('<br>')}</div>`
+          : '';
+
+        if (!report.findings.length) {
+          el('findings').innerHTML = '<div class="empty">目前規則沒有發現問題。</div>';
+          return;
+        }
+
+        el('findings').innerHTML = report.findings.map((item, index) => `
+          <article class="finding">
+            <span class="badge ${item.severity}">${escapeHtml(item.severity)}</span>
+            <div>
+              <h3>${escapeHtml(item.title)}</h3>
+              <p>${escapeHtml(item.description)}</p>
+              <div class="resource">${escapeHtml(item.rule_id)} · ${escapeHtml(item.resource_id)}</div>
+              <button class="plan-btn" data-index="${index}">查看修復計畫</button>
+            </div>
+            <div class="saving">${item.estimated_monthly_savings_usd ? `US$${item.estimated_monthly_savings_usd.toFixed(2)}/月` : ''}</div>
+          </article>
+        `).join('');
+
+        document.querySelectorAll('.plan-btn').forEach(button => {
+          button.addEventListener('click', () => showPlan(state.findings[Number(button.dataset.index)]));
+        });
+      }
+
+      async function showPlan(finding) {
+        const response = await fetch('/api/remediations/plan', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(finding)
+        });
+        const plan = await response.json();
+        el('planSummary').textContent = plan.summary;
+        el('planBody').textContent = JSON.stringify({
+          action: plan.action,
+          parameters: plan.parameters,
+          verification_steps: plan.verification_steps,
+          references: plan.references,
+          requires_approval: plan.requires_approval,
+          execution_enabled: plan.execution_enabled
+        }, null, 2);
+        el('planDialog').showModal();
+      }
+
+      el('scan').addEventListener('click', async () => {
+        const button = el('scan');
+        button.disabled = true;
+        button.textContent = '掃描中…';
+        el('analysis').textContent = '正在收集資源與執行治理規則。';
+        try {
+          const response = await fetch('/api/scans', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ mode: el('mode').value, region: el('region').value })
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.detail || '掃描失敗');
+          render(payload);
+        } catch (error) {
+          el('analysis').innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+        } finally {
+          button.disabled = false;
+          button.textContent = '開始掃描';
+        }
+      });
+
+      el('closeDialog').addEventListener('click', () => el('planDialog').close());
+    </script>
+  </body>
+</html>
