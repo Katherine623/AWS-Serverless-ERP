@@ -498,7 +498,8 @@ class DynamoDbRepository:
         item = response.get("Item")
         if not item:
             return None
-        if int(item.get("expires_at", 0)) <= int(time.time()):
+        expires_at = item.get("expires_at")
+        if expires_at is not None and int(expires_at) <= int(time.time()):
             self._table.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
             return None
         receipt = self._table.get_item(
