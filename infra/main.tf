@@ -174,7 +174,6 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = {
       AWS_ACCOUNT_ID            = data.aws_caller_identity.current.account_id
-      POWERTOOLS_SERVICE_NAME   = var.project_name
       ERP_ALERT_TOPIC_ARN       = aws_sns_topic.erp_alerts.arn
       ERP_DYNAMODB_TABLE_NAME   = aws_dynamodb_table.erp.name
       ERP_ENVIRONMENT           = var.erp_environment
@@ -200,7 +199,6 @@ resource "aws_lambda_function" "alert_worker" {
   environment {
     variables = {
       AWS_ACCOUNT_ID            = data.aws_caller_identity.current.account_id
-      POWERTOOLS_SERVICE_NAME   = "${var.project_name}-alert-worker"
       ERP_ALERT_TOPIC_ARN       = aws_sns_topic.erp_alerts.arn
       ERP_DYNAMODB_TABLE_NAME   = aws_dynamodb_table.erp.name
       ERP_ENVIRONMENT           = var.erp_environment
