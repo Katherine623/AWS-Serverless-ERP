@@ -6,6 +6,7 @@ from typing import Any, Protocol
 import boto3
 from botocore.exceptions import ClientError
 
+from app.alerts import AlertEvent
 from app.config import get_settings
 
 
@@ -51,7 +52,14 @@ class ErpRepository(Protocol):
         previous_order: Any,
         inventory: list[tuple[Any, Any | None]],
         inventory_transactions: list[Any],
+        alerts: list[AlertEvent],
     ) -> None:
+        ...
+
+    def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
+        ...
+
+    def mark_alert_batch_published(self, batch_id: str) -> None:
         ...
 
     def save_purchase_order(self, order: Any, previous_order: Any) -> None:
@@ -77,6 +85,7 @@ class InMemoryRepository:
         self.receipts: dict[str, Any] = {}
         self.idempotency: dict[str, tuple[Any, str]] = {}
         self.inventory_transactions: dict[str, Any] = {}
+        self.alert_batches: dict[str, list[AlertEvent]] = {}
 
     def get_purchase_order(self, po_id: str) -> Any | None:
         return self.purchase_orders.get(po_id)
@@ -114,6 +123,7 @@ class InMemoryRepository:
         previous_order: Any,
         inventory: list[tuple[Any, Any | None]],
         inventory_transactions: list[Any],
+        alerts: list[AlertEvent],
     ) -> None:
         if idempotency_key and idempotency_key in self.idempotency:
             existing, existing_hash = self.idempotency[idempotency_key]
@@ -126,8 +136,16 @@ class InMemoryRepository:
         for transaction in inventory_transactions:
             self.inventory_transactions[transaction.transaction_id] = transaction
         self.receipts[result.receipt_id] = result
+        if alerts:
+            self.alert_batches[result.receipt_id] = list(alerts)
         if idempotency_key:
             self.idempotency[idempotency_key] = (result, request_hash)
+
+    def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
+        return list(self.alert_batches.items())
+
+    def mark_alert_batch_published(self, batch_id: str) -> None:
+        self.alert_batches.pop(batch_id, None)
 
     def save_purchase_order(self, order: Any, previous_order: Any) -> None:
         if self.purchase_orders.get(order.po_id) != previous_order:
@@ -267,6 +285,7 @@ class DynamoDbRepository:
         previous_order: Any,
         inventory: list[tuple[Any, Any | None]],
         inventory_transactions: list[Any],
+        alerts: list[AlertEvent],
     ) -> None:
         receipt_item = self._item("receipt", result.receipt_id, result)
         receipt_item["has_exceptions"] = bool(result.exceptions)
@@ -338,6 +357,25 @@ class DynamoDbRepository:
                     }
                 }
             )
+        if alerts:
+            actions.append(
+                {
+                    "Put": {
+                        "TableName": self._table.name,
+                        "Item": {
+                            "PK": f"alert_batch#{result.receipt_id}",
+                            "SK": "META",
+                            "entity": "alert_batch",
+                            "status": "pending",
+                            "data": json.dumps(
+                                [event.model_dump(mode="json") for event in alerts],
+                                ensure_ascii=False,
+                            ),
+                        },
+                        "ConditionExpression": "attribute_not_exists(PK)",
+                    }
+                }
+            )
         try:
             self._table.meta.client.transact_write_items(TransactItems=actions)
         except ClientError as exc:
@@ -403,6 +441,28 @@ class DynamoDbRepository:
         except ClientError as exc:
             if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
+
+    def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
+        items = self._scan_items(
+            FilterExpression="#entity = :entity AND #status = :status",
+            ExpressionAttributeNames={"#entity": "entity", "#status": "status"},
+            ExpressionAttributeValues={":entity": "alert_batch", ":status": "pending"},
+        )
+        return [
+            (
+                item["PK"].removeprefix("alert_batch#"),
+                [AlertEvent.model_validate(event) for event in json.loads(item["data"])],
+            )
+            for item in items
+        ]
+
+    def mark_alert_batch_published(self, batch_id: str) -> None:
+        self._table.update_item(
+            Key={"PK": f"alert_batch#{batch_id}", "SK": "META"},
+            UpdateExpression="SET #status = :status",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":status": "published"},
+        )
 
 
 def create_repository() -> ErpRepository:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from threading import Lock
@@ -16,6 +17,8 @@ from app.repository import (
     IdempotencyConflictError,
     create_repository,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PurchaseOrderItem(BaseModel):
@@ -341,15 +344,6 @@ class ErpStore:
                 received_by=request.received_by,
                 received_at=datetime.now(UTC),
             )
-            self.repository.save_receipt(
-                result,
-                idempotency_key,
-                request_hash,
-                order,
-                previous_order,
-                inventory_updates,
-                inventory_transactions,
-            )
             if exceptions:
                 alerts.append(
                     AlertEvent(
@@ -378,9 +372,31 @@ class ErpStore:
                             occurred_at=result.received_at,
                         )
                     )
-        for alert in alerts:
-            self.alert_publisher.publish(alert)
+            self.repository.save_receipt(
+                result,
+                idempotency_key,
+                request_hash,
+                order,
+                previous_order,
+                inventory_updates,
+                inventory_transactions,
+                alerts,
+            )
+        self.dispatch_pending_alerts()
         return result
+
+    def dispatch_pending_alerts(self) -> int:
+        published = 0
+        for batch_id, events in self.repository.list_pending_alert_batches():
+            try:
+                for event in events:
+                    self.alert_publisher.publish(event)
+            except Exception:
+                logger.exception("ERP alert batch %s could not be delivered", batch_id)
+                continue
+            self.repository.mark_alert_batch_published(batch_id)
+            published += len(events)
+        return published
 
     def resolve_exception(
         self, po_id: str, request: ResolveExceptionRequest

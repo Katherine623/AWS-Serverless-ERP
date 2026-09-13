@@ -7,6 +7,12 @@ from app.erp import (
 from app.repository import InMemoryRepository
 
 
+class FailingAlertPublisher:
+    def publish(self, event: object) -> None:
+        del event
+        raise RuntimeError("SNS unavailable")
+
+
 def make_store() -> ErpStore:
     return ErpStore(repository=InMemoryRepository())
 
@@ -72,3 +78,22 @@ def test_over_receipt_can_only_be_closed_as_approved_difference() -> None:
 
     assert closed.status == "差異結案"
     assert closed.approved_variances == {"TEST-MAT-001": -2}
+
+
+def test_failed_alert_delivery_keeps_pending_outbox_batch() -> None:
+    repository = InMemoryRepository()
+    store = ErpStore(repository=repository, alert_publisher=FailingAlertPublisher())
+    make_order(store)
+
+    result = store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "TEST-PO-001",
+                "items": [{"material_id": "TEST-MAT-001", "received_quantity": 5}],
+            }
+        ),
+        idempotency_key="failed-alert-001",
+    )
+
+    assert result.status == "待處理異常"
+    assert len(repository.list_pending_alert_batches()) == 1
