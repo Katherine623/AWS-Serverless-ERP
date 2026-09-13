@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -28,11 +29,17 @@ app = FastAPI(
 )
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
-    request_id = request.headers.get("X-Request-Id") or f"req-{uuid4().hex}"
+    candidate = request.headers.get("X-Request-Id", "")
+    request_id = (
+        candidate
+        if REQUEST_ID_PATTERN.fullmatch(candidate)
+        else f"req-{uuid4().hex}"
+    )
     response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
     return response
