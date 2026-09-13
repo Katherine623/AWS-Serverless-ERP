@@ -48,7 +48,7 @@ CloudFront -> S3 Frontend -> API Gateway -> Lambda
                                       CloudWatch: Logs / Alarms
 ```
 
-Terraform 與 Docker 已保留為部署基礎。設定 `enable_frontend_cdn=true` 會建立私有 S3 + CloudFront，同一個 CloudFront domain 會把 `/api/*` 轉送到 API Gateway；`manage_cognito_user_pool=true` 會建立 Cognito user pool 與 ERP groups。SQS Excel 匯入、Pre-signed URL 與正式自訂網域憑證仍需依實際營運流程補上；目前 Terraform 已支援可選 JWT authorizer、DynamoDB PITR、alert worker、API access logs 與 CloudWatch alarms。`ops_topic_arn` 可提供給維運訂閱流程。
+Terraform 與 Docker 已保留為部署基礎。設定 `enable_frontend_cdn=true` 會建立私有 S3 + CloudFront，同一個 CloudFront domain 會把 `/api/*` 轉送到 API Gateway；`manage_cognito_user_pool=true` 會建立 Cognito user pool 與 ERP groups；`enable_excel_import=true` 會建立私有 XLSX S3 bucket、SQS、DLQ 與 import worker。Pre-signed URL 與正式自訂網域憑證仍需依實際營運流程補上；目前 Terraform 已支援可選 JWT authorizer、DynamoDB PITR、alert worker、API access logs 與 CloudWatch alarms。`ops_topic_arn` 可提供給維運訂閱流程。
 
 ## 本機啟動
 
@@ -74,6 +74,7 @@ uvicorn app.main:app --reload
 | POST | `/api/purchase-orders` | 建立採購單 |
 | POST | `/api/receipts` | 送出驗收並更新庫存 |
 | POST | `/api/inventory-adjustments` | 盤點調整、退貨或報廢（需要 Idempotency-Key） |
+| POST | `/api/imports/excel/upload-url` | 取得 XLSX 預簽名上傳 URL |
 | POST | `/api/purchase-orders/{po_id}/exception-resolution` | 補貨或差異允收結案 |
 | GET | `/api/inventory` | 查詢庫存 |
 | GET | `/api/v2/inventory?limit=50&cursor=...` | 分頁查詢庫存 |
@@ -119,6 +120,8 @@ terraform -chdir=infra apply
 若由不同網域的前端呼叫 API，請明確設定 `cors_allowed_origins = ["https://erp.example.com"]`；留空時不會啟用 API Gateway CORS。不要在正式環境使用 `*`。HTTP API stage 預設限制 50 req/s、burst 100，可依流量調整 `api_rate_limit` 與 `api_burst_limit`。
 
 團隊或正式環境不要使用本機 Terraform state；請先建立受加密與版本控管保護的 S3 state bucket，再將 `infra/backend.tf.example` 複製成 `infra/backend.tf` 並填入實際 bucket。
+
+Excel 匯入工作表第一列需包含 `po_id`、`supplier_name`、`expected_date`、`material_id`、`material_name`、`ordered_quantity`；`unit` 可選，`.xlsx` 上傳到 import bucket 後會經 SQS 交給 worker，連續失敗的訊息會進 DLQ。
 
 ## 履歷描述
 

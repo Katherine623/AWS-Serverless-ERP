@@ -153,6 +153,18 @@ variable "frontend_force_destroy" {
   default     = false
 }
 
+variable "enable_excel_import" {
+  description = "Create private S3, SQS and Lambda resources for XLSX PO imports."
+  type        = bool
+  default     = false
+}
+
+variable "import_bucket_force_destroy" {
+  description = "Allow Terraform to delete uploaded import files with the bucket."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags applied to managed AWS resources."
   type        = map(string)

@@ -14,6 +14,8 @@ from app.auth import Actor, get_current_actor, require_roles
 from app.erp import (
     CreatePurchaseOrderRequest,
     DashboardSummary,
+    ExcelUploadRequest,
+    ExcelUploadResponse,
     InventoryAdjustmentRequest,
     InventoryAdjustmentResult,
     InventoryItem,
@@ -29,6 +31,7 @@ from app.erp import (
     ResolveExceptionRequest,
     store,
 )
+from app.imports import create_excel_upload_url
 from app.repository import IdempotencyConflictError
 
 app = FastAPI(
@@ -162,6 +165,25 @@ def adjust_inventory(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/imports/excel/upload-url", response_model=ExcelUploadResponse)
+def create_excel_upload(
+    request: ExcelUploadRequest,
+    actor: Annotated[Actor, Depends(require_roles("purchaser", "admin"))],
+) -> ExcelUploadResponse:
+    del actor
+    try:
+        object_key, upload_url, expires_in = create_excel_upload_url(request.file_name)
+        return ExcelUploadResponse(
+            object_key=object_key,
+            upload_url=upload_url,
+            expires_in=expires_in,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/api/purchase-orders/{po_id}/exception-resolution", response_model=PurchaseOrder)

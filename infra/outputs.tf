@@ -42,3 +42,13 @@ output "frontend_url" {
   description = "CloudFront frontend URL, when frontend CDN is enabled."
   value       = var.enable_frontend_cdn ? "https://${aws_cloudfront_distribution.frontend[0].domain_name}" : null
 }
+
+output "import_bucket_name" {
+  description = "Private XLSX import bucket name, when enabled."
+  value       = var.enable_excel_import ? aws_s3_bucket.imports[0].bucket : null
+}
+
+output "import_queue_url" {
+  description = "SQS import queue URL, when enabled."
+  value       = var.enable_excel_import ? aws_sqs_queue.imports[0].url : null
+}

@@ -166,6 +166,12 @@ resource "aws_cloudwatch_log_group" "api_gateway" {
   tags              = var.tags
 }
 
+resource "aws_cloudwatch_log_group" "import_worker" {
+  name              = "/aws/lambda/${var.project_name}-import-worker"
+  retention_in_days = var.log_retention_days
+  tags              = var.tags
+}
+
 resource "aws_sns_topic" "erp_alerts" {
   name              = "${var.project_name}-alerts"
   kms_master_key_id = "alias/aws/sns"
@@ -238,6 +244,7 @@ resource "aws_lambda_function" "api" {
       ERP_IDEMPOTENCY_TTL_DAYS  = tostring(var.idempotency_ttl_days)
       ERP_ALERT_OUTBOX_TTL_DAYS = tostring(var.alert_outbox_ttl_days)
       ERP_ALERT_LEASE_SECONDS   = tostring(var.alert_lease_seconds)
+      ERP_IMPORT_BUCKET_NAME    = var.enable_excel_import ? aws_s3_bucket.imports[0].bucket : ""
     }
   }
 }
@@ -265,7 +272,55 @@ resource "aws_lambda_function" "alert_worker" {
       ERP_IDEMPOTENCY_TTL_DAYS  = tostring(var.idempotency_ttl_days)
       ERP_ALERT_OUTBOX_TTL_DAYS = tostring(var.alert_outbox_ttl_days)
       ERP_ALERT_LEASE_SECONDS   = tostring(var.alert_lease_seconds)
+      ERP_IMPORT_BUCKET_NAME    = var.enable_excel_import ? aws_s3_bucket.imports[0].bucket : ""
     }
+  }
+}
+
+resource "aws_lambda_function" "import_worker" {
+  count            = var.enable_excel_import ? 1 : 0
+  function_name    = "${var.project_name}-import-worker"
+  role             = aws_iam_role.lambda.arn
+  filename         = "${path.module}/.lambda-build/lambda.zip"
+  source_code_hash = filebase64sha256("${path.module}/.lambda-build/lambda.zip")
+  runtime          = "python3.12"
+  handler          = "app.import_worker.handler"
+  architectures    = ["x86_64"]
+  memory_size      = 512
+  timeout          = 240
+  tags             = var.tags
+  depends_on       = [aws_cloudwatch_log_group.import_worker]
+
+  environment {
+    variables = {
+      ERP_ALERT_TOPIC_ARN       = aws_sns_topic.erp_alerts.arn
+      ERP_DYNAMODB_TABLE_NAME   = aws_dynamodb_table.erp.name
+      ERP_ENVIRONMENT           = var.erp_environment
+      ERP_SEED_DEMO             = "false"
+      ERP_MCP_MUTATIONS_ENABLED = "false"
+      ERP_IDEMPOTENCY_TTL_DAYS  = tostring(var.idempotency_ttl_days)
+      ERP_ALERT_OUTBOX_TTL_DAYS = tostring(var.alert_outbox_ttl_days)
+      ERP_ALERT_LEASE_SECONDS   = tostring(var.alert_lease_seconds)
+      ERP_IMPORT_BUCKET_NAME    = var.enable_excel_import ? aws_s3_bucket.imports[0].bucket : ""
+    }
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_sqs" {
+  count      = var.enable_excel_import ? 1 : 0
+  role       = aws_iam_role.lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole"
+}
+
+resource "aws_lambda_event_source_mapping" "imports" {
+  count                              = var.enable_excel_import ? 1 : 0
+  event_source_arn                   = aws_sqs_queue.imports[0].arn
+  function_name                      = aws_lambda_function.import_worker[0].arn
+  batch_size                         = 1
+  function_response_types            = ["ReportBatchItemFailures"]
+  maximum_batching_window_in_seconds = 5
+  scaling_config {
+    maximum_concurrency = 2
   }
 }
 
@@ -538,6 +593,114 @@ resource "aws_s3_bucket_policy" "frontend" {
           "AWS:SourceArn" = aws_cloudfront_distribution.frontend[0].arn
         }
       }
+    }]
+  })
+}
+
+resource "aws_s3_bucket" "imports" {
+  count         = var.enable_excel_import ? 1 : 0
+  bucket_prefix = "${var.project_name}-imports-"
+  force_destroy = var.import_bucket_force_destroy
+  tags          = var.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "imports" {
+  count                   = var.enable_excel_import ? 1 : 0
+  bucket                  = aws_s3_bucket.imports[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "imports" {
+  count  = var.enable_excel_import ? 1 : 0
+  bucket = aws_s3_bucket.imports[0].id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "imports" {
+  count  = var.enable_excel_import ? 1 : 0
+  bucket = aws_s3_bucket.imports[0].id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_sqs_queue" "imports_dlq" {
+  count                     = var.enable_excel_import ? 1 : 0
+  name                      = "${var.project_name}-imports-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
+  tags                      = var.tags
+}
+
+resource "aws_sqs_queue" "imports" {
+  count                      = var.enable_excel_import ? 1 : 0
+  name                       = "${var.project_name}-imports"
+  visibility_timeout_seconds = 300
+  message_retention_seconds  = 345600
+  receive_wait_time_seconds  = 20
+  sqs_managed_sse_enabled    = true
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.imports_dlq[0].arn
+    maxReceiveCount     = 5
+  })
+  tags = var.tags
+}
+
+resource "aws_sqs_queue_policy" "imports" {
+  count     = var.enable_excel_import ? 1 : 0
+  queue_url = aws_sqs_queue.imports[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "AllowS3ImportNotifications"
+      Effect = "Allow"
+      Principal = {
+        Service = "s3.amazonaws.com"
+      }
+      Action   = "sqs:SendMessage"
+      Resource = aws_sqs_queue.imports[0].arn
+      Condition = {
+        ArnEquals = {
+          "aws:SourceArn" = aws_s3_bucket.imports[0].arn
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_s3_bucket_notification" "imports" {
+  count  = var.enable_excel_import ? 1 : 0
+  bucket = aws_s3_bucket.imports[0].id
+
+  queue {
+    queue_arn     = aws_sqs_queue.imports[0].arn
+    events        = ["s3:ObjectCreated:Put", "s3:ObjectCreated:CompleteMultipartUpload"]
+    filter_suffix = ".xlsx"
+  }
+
+  depends_on = [aws_sqs_queue_policy.imports]
+}
+
+resource "aws_iam_role_policy" "lambda_import" {
+  count = var.enable_excel_import ? 1 : 0
+  name  = "${var.project_name}-import-read"
+  role  = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"]
+      Resource = "${aws_s3_bucket.imports[0].arn}/*"
     }]
   })
 }
