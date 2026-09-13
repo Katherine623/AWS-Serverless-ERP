@@ -141,6 +141,18 @@ variable "api_burst_limit" {
   }
 }
 
+variable "enable_frontend_cdn" {
+  description = "Create a private S3 frontend bucket and CloudFront distribution."
+  type        = bool
+  default     = false
+}
+
+variable "frontend_force_destroy" {
+  description = "Allow Terraform to delete frontend objects with the bucket."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags applied to managed AWS resources."
   type        = map(string)

@@ -48,7 +48,7 @@ CloudFront -> S3 Frontend -> API Gateway -> Lambda
                                       CloudWatch: Logs / Alarms
 ```
 
-Terraform 與 Docker 已保留為部署基礎。CloudFront、私有 S3、Pre-signed URL、SQS Excel 匯入與完整 Cognito user pool 仍是後續 roadmap；目前 Terraform 已支援可選 JWT authorizer、DynamoDB PITR、alert worker、API access logs 與 CloudWatch alarms。`ops_topic_arn` 可提供給維運訂閱流程。
+Terraform 與 Docker 已保留為部署基礎。設定 `enable_frontend_cdn=true` 會建立私有 S3 + CloudFront，同一個 CloudFront domain 會把 `/api/*` 轉送到 API Gateway；`manage_cognito_user_pool=true` 會建立 Cognito user pool 與 ERP groups。SQS Excel 匯入、Pre-signed URL 與正式自訂網域憑證仍需依實際營運流程補上；目前 Terraform 已支援可選 JWT authorizer、DynamoDB PITR、alert worker、API access logs 與 CloudWatch alarms。`ops_topic_arn` 可提供給維運訂閱流程。
 
 ## 本機啟動
 

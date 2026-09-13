@@ -37,3 +37,8 @@ output "cognito_client_id" {
   description = "Managed Cognito app client ID, when enabled."
   value       = var.manage_cognito_user_pool ? aws_cognito_user_pool_client.erp[0].id : null
 }
+
+output "frontend_url" {
+  description = "CloudFront frontend URL, when frontend CDN is enabled."
+  value       = var.enable_frontend_cdn ? "https://${aws_cloudfront_distribution.frontend[0].domain_name}" : null
+}
