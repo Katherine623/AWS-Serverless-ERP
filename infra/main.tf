@@ -231,6 +231,16 @@ resource "aws_lambda_permission" "alert_worker_events" {
 resource "aws_apigatewayv2_api" "http" {
   name          = var.project_name
   protocol_type = "HTTP"
+
+  dynamic "cors_configuration" {
+    for_each = length(var.cors_allowed_origins) > 0 ? [true] : []
+    content {
+      allow_headers = ["content-type", "idempotency-key", "x-request-id", "authorization"]
+      allow_methods = ["GET", "POST", "OPTIONS"]
+      allow_origins = var.cors_allowed_origins
+      max_age       = 300
+    }
+  }
 }
 
 resource "aws_apigatewayv2_integration" "lambda" {
@@ -244,7 +254,6 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
   count            = var.api_auth_enabled ? 1 : 0
   api_id           = aws_apigatewayv2_api.http.id
   authorizer_type  = "JWT"
-  authorizer_uri   = null
   identity_sources = ["$request.header.Authorization"]
   name             = "${var.project_name}-jwt"
 

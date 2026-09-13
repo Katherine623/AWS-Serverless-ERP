@@ -68,6 +68,12 @@ variable "cognito_audience" {
   default     = ""
 }
 
+variable "cors_allowed_origins" {
+  description = "Explicit browser origins allowed to call the HTTP API."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Tags applied to managed AWS resources."
   type        = map(string)
