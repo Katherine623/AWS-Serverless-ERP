@@ -44,6 +44,7 @@ class Settings:
     idempotency_ttl_days: int
     alert_outbox_ttl_days: int
     alert_lease_seconds: int
+    import_bucket_name: str | None
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -88,6 +89,7 @@ class Settings:
                 minimum=30,
                 maximum=86400,
             ),
+            import_bucket_name=os.getenv("ERP_IMPORT_BUCKET_NAME") or None,
         )
 
 
