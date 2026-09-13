@@ -16,7 +16,14 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - uses: hashicorp/setup-terraform@v3
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: pytest
-
+      - run: bash scripts/build_lambda.sh
+      - run: terraform fmt -check
+        working-directory: infra
+      - run: terraform init -backend=false
+        working-directory: infra
+      - run: terraform validate
+        working-directory: infra

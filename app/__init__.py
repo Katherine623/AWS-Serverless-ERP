@@ -1,1 +1,1 @@
-"""AWS FinOpsSec Governance Agent."""
+"""AWS Serverless ERP receiving platform."""
