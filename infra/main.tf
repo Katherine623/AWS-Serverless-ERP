@@ -434,6 +434,15 @@ resource "aws_s3_bucket_public_access_block" "frontend" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_ownership_controls" "frontend" {
+  count  = var.enable_frontend_cdn ? 1 : 0
+  bucket = aws_s3_bucket.frontend[0].id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "frontend" {
   count  = var.enable_frontend_cdn ? 1 : 0
   bucket = aws_s3_bucket.frontend[0].id
@@ -613,6 +622,15 @@ resource "aws_s3_bucket_public_access_block" "imports" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_ownership_controls" "imports" {
+  count  = var.enable_excel_import ? 1 : 0
+  bucket = aws_s3_bucket.imports[0].id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "imports" {
   count  = var.enable_excel_import ? 1 : 0
   bucket = aws_s3_bucket.imports[0].id
@@ -630,6 +648,28 @@ resource "aws_s3_bucket_versioning" "imports" {
 
   versioning_configuration {
     status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "imports" {
+  count  = var.enable_excel_import ? 1 : 0
+  bucket = aws_s3_bucket.imports[0].id
+
+  rule {
+    id     = "expire-import-files"
+    status = "Enabled"
+
+    filter {
+      prefix = "incoming/"
+    }
+
+    expiration {
+      days = 30
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
   }
 }
 
