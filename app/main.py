@@ -13,6 +13,7 @@ from app.erp import (
     InventoryItem,
     InventoryTransaction,
     PurchaseOrder,
+    PurchaseOrderNotFoundError,
     ReceiptRequest,
     ReceiptResult,
     ResolveExceptionRequest,
@@ -74,9 +75,10 @@ def receive_purchase_order(
         return store.receive(request, idempotency_key=idempotency_key)
     except IdempotencyConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PurchaseOrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        status_code = 404 if "找不到採購單" in str(exc) else 422
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/api/purchase-orders/{po_id}/exception-resolution", response_model=PurchaseOrder)
@@ -87,9 +89,10 @@ def resolve_purchase_order_exception(
         return store.resolve_exception(po_id, request)
     except IdempotencyConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PurchaseOrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        status_code = 404 if "找不到採購單" in str(exc) else 422
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/inventory", response_model=list[InventoryItem])

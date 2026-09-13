@@ -1,6 +1,9 @@
+import pytest
+
 from app.erp import (
     CreatePurchaseOrderRequest,
     ErpStore,
+    PurchaseOrderNotFoundError,
     ReceiptRequest,
     ResolveExceptionRequest,
 )
@@ -97,3 +100,18 @@ def test_failed_alert_delivery_keeps_pending_outbox_batch() -> None:
 
     assert result.status == "待處理異常"
     assert len(repository.list_pending_alert_batches()) == 1
+
+
+def test_unknown_purchase_order_uses_typed_not_found_error() -> None:
+    store = make_store()
+
+    with pytest.raises(PurchaseOrderNotFoundError, match="找不到採購單"):
+        store.receive(
+            ReceiptRequest.model_validate(
+                {
+                    "po_id": "UNKNOWN-PO",
+                    "items": [{"material_id": "MAT", "received_quantity": 1}],
+                }
+            ),
+            idempotency_key="unknown-po-001",
+        )

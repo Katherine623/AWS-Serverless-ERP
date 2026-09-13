@@ -21,6 +21,10 @@ from app.repository import (
 logger = logging.getLogger(__name__)
 
 
+class PurchaseOrderNotFoundError(ValueError):
+    """Raised when an ERP operation references an unknown purchase order."""
+
+
 class PurchaseOrderItem(BaseModel):
     material_id: str = Field(min_length=1, max_length=80)
     material_name: str = Field(min_length=1, max_length=160)
@@ -285,7 +289,7 @@ class ErpStore:
         with self._lock:
             order = self.repository.get_purchase_order(request.po_id)
             if not order:
-                raise ValueError(f"找不到採購單 {request.po_id}")
+                raise PurchaseOrderNotFoundError(f"找不到採購單 {request.po_id}")
             if order.status not in {"待驗收", "待補貨"}:
                 raise IdempotencyConflictError(f"採購單 {request.po_id} 目前不可收料")
             ordered = {item.material_id: item for item in order.items}
@@ -410,7 +414,7 @@ class ErpStore:
         with self._lock:
             order = self.repository.get_purchase_order(po_id)
             if not order:
-                raise ValueError(f"找不到採購單 {po_id}")
+                raise PurchaseOrderNotFoundError(f"找不到採購單 {po_id}")
             if order.status != "待處理異常":
                 raise IdempotencyConflictError(f"採購單 {po_id} 沒有待處理異常")
             previous_order = order.model_copy(deep=True)
