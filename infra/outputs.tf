@@ -18,3 +18,7 @@ output "data_table_name" {
   value       = aws_dynamodb_table.erp.name
 }
 
+output "alert_worker_arn" {
+  description = "Lambda worker that replays pending ERP alert batches."
+  value       = aws_lambda_function.alert_worker.arn
+}

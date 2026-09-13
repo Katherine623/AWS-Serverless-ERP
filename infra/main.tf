@@ -15,6 +15,19 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
+resource "terraform_data" "auth_config" {
+  input = var.api_auth_enabled
+
+  lifecycle {
+    precondition {
+      condition = !var.api_auth_enabled || (
+        var.cognito_issuer_url != "" && var.cognito_audience != ""
+      )
+      error_message = "cognito_issuer_url and cognito_audience are required when API auth is enabled."
+    }
+  }
+}
+
 resource "aws_dynamodb_table" "erp" {
   name         = "${var.project_name}-data"
   billing_mode = "PAY_PER_REQUEST"
@@ -31,6 +44,11 @@ resource "aws_dynamodb_table" "erp" {
     type = "S"
   }
 
+  point_in_time_recovery {
+    enabled = var.enable_pitr
+  }
+
+  tags = var.tags
 }
 
 resource "aws_iam_role" "lambda" {
@@ -55,11 +73,19 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
 
 resource "aws_cloudwatch_log_group" "api" {
   name              = "/aws/lambda/${var.project_name}"
-  retention_in_days = 1
+  retention_in_days = var.log_retention_days
+  tags              = var.tags
+}
+
+resource "aws_cloudwatch_log_group" "alert_worker" {
+  name              = "/aws/lambda/${var.project_name}-alert-worker"
+  retention_in_days = var.log_retention_days
+  tags              = var.tags
 }
 
 resource "aws_sns_topic" "erp_alerts" {
   name = "${var.project_name}-alerts"
+  tags = var.tags
 }
 
 resource "aws_iam_role_policy" "lambda_alerts" {
@@ -87,6 +113,7 @@ resource "aws_iam_role_policy" "lambda_data" {
       Action = [
         "dynamodb:GetItem",
         "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
         "dynamodb:Scan",
         "dynamodb:TransactWriteItems"
       ]
@@ -105,16 +132,66 @@ resource "aws_lambda_function" "api" {
   architectures    = ["x86_64"]
   memory_size      = 512
   timeout          = 30
+  tags             = var.tags
   depends_on       = [aws_cloudwatch_log_group.api]
 
   environment {
     variables = {
-      AWS_ACCOUNT_ID          = data.aws_caller_identity.current.account_id
-      POWERTOOLS_SERVICE_NAME = var.project_name
-      ERP_ALERT_TOPIC_ARN     = aws_sns_topic.erp_alerts.arn
-      ERP_DYNAMODB_TABLE_NAME = aws_dynamodb_table.erp.name
+      AWS_ACCOUNT_ID            = data.aws_caller_identity.current.account_id
+      POWERTOOLS_SERVICE_NAME   = var.project_name
+      ERP_ALERT_TOPIC_ARN       = aws_sns_topic.erp_alerts.arn
+      ERP_DYNAMODB_TABLE_NAME   = aws_dynamodb_table.erp.name
+      ERP_ENVIRONMENT           = var.erp_environment
+      ERP_SEED_DEMO             = tostring(var.seed_demo)
+      ERP_MCP_MUTATIONS_ENABLED = "false"
     }
   }
+}
+
+resource "aws_lambda_function" "alert_worker" {
+  function_name    = "${var.project_name}-alert-worker"
+  role             = aws_iam_role.lambda.arn
+  filename         = "${path.module}/.lambda-build/lambda.zip"
+  source_code_hash = filebase64sha256("${path.module}/.lambda-build/lambda.zip")
+  runtime          = "python3.12"
+  handler          = "app.alert_worker.handler"
+  architectures    = ["x86_64"]
+  memory_size      = 256
+  timeout          = 30
+  tags             = var.tags
+  depends_on       = [aws_cloudwatch_log_group.alert_worker]
+
+  environment {
+    variables = {
+      AWS_ACCOUNT_ID            = data.aws_caller_identity.current.account_id
+      POWERTOOLS_SERVICE_NAME   = "${var.project_name}-alert-worker"
+      ERP_ALERT_TOPIC_ARN       = aws_sns_topic.erp_alerts.arn
+      ERP_DYNAMODB_TABLE_NAME   = aws_dynamodb_table.erp.name
+      ERP_ENVIRONMENT           = var.erp_environment
+      ERP_SEED_DEMO             = "false"
+      ERP_MCP_MUTATIONS_ENABLED = "false"
+    }
+  }
+}
+
+resource "aws_cloudwatch_event_rule" "alert_worker" {
+  name                = "${var.project_name}-alert-worker"
+  description         = "Replay pending ERP alert batches."
+  schedule_expression = "rate(1 minute)"
+  tags                = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "alert_worker" {
+  rule = aws_cloudwatch_event_rule.alert_worker.name
+  arn  = aws_lambda_function.alert_worker.arn
+}
+
+resource "aws_lambda_permission" "alert_worker_events" {
+  statement_id  = "AllowEventBridgeAlertWorker"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.alert_worker.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.alert_worker.arn
 }
 
 resource "aws_apigatewayv2_api" "http" {
@@ -129,10 +206,27 @@ resource "aws_apigatewayv2_integration" "lambda" {
   payload_format_version = "2.0"
 }
 
+resource "aws_apigatewayv2_authorizer" "jwt" {
+  count            = var.api_auth_enabled ? 1 : 0
+  api_id           = aws_apigatewayv2_api.http.id
+  authorizer_type  = "JWT"
+  authorizer_uri   = null
+  identity_sources = ["$request.header.Authorization"]
+  name             = "${var.project_name}-jwt"
+
+  jwt_configuration {
+    audience = [var.cognito_audience]
+    issuer   = var.cognito_issuer_url
+  }
+}
+
 resource "aws_apigatewayv2_route" "default" {
-  api_id    = aws_apigatewayv2_api.http.id
-  route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "$default"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = var.api_auth_enabled ? "JWT" : "NONE"
+  authorizer_id      = var.api_auth_enabled ? aws_apigatewayv2_authorizer.jwt[0].id : null
+  depends_on         = [terraform_data.auth_config]
 }
 
 resource "aws_apigatewayv2_stage" "default" {
