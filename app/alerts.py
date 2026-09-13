@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime
 from typing import Protocol
 
 import boto3
 from pydantic import BaseModel
+
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class SnsAlertPublisher:
 
 
 def create_alert_publisher() -> AlertPublisher:
-    topic_arn = os.getenv("ERP_ALERT_TOPIC_ARN")
+    topic_arn = get_settings().alert_topic_arn
     if topic_arn:
         return SnsAlertPublisher(topic_arn)
     return LoggingAlertPublisher()

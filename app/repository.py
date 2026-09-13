@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Protocol
 
 import boto3
 from botocore.exceptions import ClientError
+
+from app.config import get_settings
 
 
 class IdempotencyConflictError(ValueError):
@@ -405,7 +406,10 @@ class DynamoDbRepository:
 
 
 def create_repository() -> ErpRepository:
-    table_name = os.getenv("ERP_DYNAMODB_TABLE_NAME")
+    settings = get_settings()
+    table_name = settings.dynamodb_table_name
     if table_name:
         return DynamoDbRepository(table_name)
+    if settings.environment == "production":
+        raise RuntimeError("DynamoDB repository is required in production")
     return InMemoryRepository()

@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.alerts import AlertEvent, AlertPublisher, create_alert_publisher
+from app.config import get_settings
 from app.repository import (
     ErpRepository,
     IdempotencyConflictError,
@@ -146,6 +147,8 @@ class ErpStore:
         self._seed()
 
     def _seed(self) -> None:
+        if not get_settings().seed_demo:
+            return
         now = datetime.now(UTC)
         demo_orders = [
             PurchaseOrder(
