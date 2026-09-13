@@ -120,6 +120,7 @@ Evidence: `app/repository.py:260-354`, `app/erp.py:253-336`, `app/main.py:59-82`
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| GET | `/health` / `/ready` | Liveness / repository readiness |
 | GET | `/api/dashboard` | KPI 摘要 |
 | GET/POST | `/api/purchase-orders` | 查詢 / 建立 PO |
 | POST | `/api/receipts` | 收料、更新庫存、排入警示 |
@@ -161,7 +162,7 @@ terraform apply
 
 | File | Responsibility |
 | --- | --- |
-| `app/main.py` | Routes、HTTP status、Mangum handler |
+| `app/main.py` | Routes、health/readiness、HTTP status、Mangum handler |
 | `app/erp.py` | Domain model、收料與異常狀態轉換 |
 | `app/repository.py` | InMemory / DynamoDB adapter、transaction writes |
 | `app/alerts.py` | Logging / SNS publisher |
