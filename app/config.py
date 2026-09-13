@@ -26,6 +26,7 @@ class Settings:
     dynamodb_table_name: str | None
     alert_topic_arn: str | None
     seed_demo: bool
+    mcp_mutations_enabled: bool
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -49,6 +50,9 @@ class Settings:
             dynamodb_table_name=table_name,
             alert_topic_arn=os.getenv("ERP_ALERT_TOPIC_ARN") or None,
             seed_demo=seed_demo,
+            mcp_mutations_enabled=_parse_bool(
+                os.getenv("ERP_MCP_MUTATIONS_ENABLED"), default=False
+            ),
         )
 
 
