@@ -19,6 +19,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
+      - run: pip-audit -r requirements.txt
       - run: pytest
       - run: bash scripts/build_lambda.sh
       - run: terraform fmt -check

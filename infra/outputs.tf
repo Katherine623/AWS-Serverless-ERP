@@ -13,6 +13,11 @@ output "alert_topic_arn" {
   value       = aws_sns_topic.erp_alerts.arn
 }
 
+output "ops_topic_arn" {
+  description = "SNS topic receiving infrastructure alarm notifications."
+  value       = aws_sns_topic.erp_ops.arn
+}
+
 output "data_table_name" {
   description = "DynamoDB table used by the ERP API."
   value       = aws_dynamodb_table.erp.name

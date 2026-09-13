@@ -129,6 +129,11 @@ resource "aws_sns_topic" "erp_alerts" {
   tags = var.tags
 }
 
+resource "aws_sns_topic" "erp_ops" {
+  name = "${var.project_name}-ops"
+  tags = var.tags
+}
+
 resource "aws_iam_role_policy" "lambda_alerts" {
   name = "${var.project_name}-publish-alerts"
   role = aws_iam_role.lambda.id
@@ -307,4 +312,68 @@ resource "aws_lambda_permission" "api_gateway" {
   function_name = aws_lambda_function.api.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.http.execution_arn}/*/*"
+}
+
+resource "aws_cloudwatch_metric_alarm" "api_errors" {
+  alarm_name          = "${var.project_name}-api-errors"
+  alarm_description   = "API Lambda returned one or more errors in five minutes."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.erp_ops.arn]
+  dimensions          = { FunctionName = aws_lambda_function.api.function_name }
+  tags                = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "alert_worker_errors" {
+  alarm_name          = "${var.project_name}-alert-worker-errors"
+  alarm_description   = "Alert replay worker returned one or more errors in five minutes."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.erp_ops.arn]
+  dimensions          = { FunctionName = aws_lambda_function.alert_worker.function_name }
+  tags                = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "api_gateway_5xx" {
+  alarm_name          = "${var.project_name}-api-gateway-5xx"
+  alarm_description   = "HTTP API returned one or more 5xx responses in five minutes."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "5XXError"
+  namespace           = "AWS/ApiGateway"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.erp_ops.arn]
+  dimensions          = { ApiId = aws_apigatewayv2_api.http.id, Stage = "$default" }
+  tags                = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "dynamodb_throttles" {
+  alarm_name          = "${var.project_name}-dynamodb-throttles"
+  alarm_description   = "DynamoDB read or write requests were throttled in five minutes."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ThrottledRequests"
+  namespace           = "AWS/DynamoDB"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.erp_ops.arn]
+  dimensions          = { TableName = aws_dynamodb_table.erp.name }
+  tags                = var.tags
 }
