@@ -104,6 +104,8 @@ terraform -chdir=infra apply
 
 正式環境建議確認 `erp_environment=production`、`seed_demo=false`，並提供 Cognito issuer/audience 後設定 `api_auth_enabled=true`。此部署方式不需要 Docker 或 ECR；SNS Topic 會保留，警示可透過 CloudWatch Logs 查看。
 
+團隊或正式環境不要使用本機 Terraform state；請先建立受加密與版本控管保護的 S3 state bucket，再將 `infra/backend.tf.example` 複製成 `infra/backend.tf` 並填入實際 bucket。
+
 ## 履歷描述
 
 > 建置 AWS Serverless ERP 物料點收平台，整合採購單、到貨驗收、異常判斷、庫存更新與營運 Dashboard；使用 FastAPI、Lambda ZIP、API Gateway、DynamoDB、SNS 與 approval-gated MCP 設計可追蹤的收料流程，並以 Terraform 與 GitHub Actions 管理雲端基礎設施與 CI/CD。
