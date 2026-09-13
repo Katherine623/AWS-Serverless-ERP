@@ -38,7 +38,8 @@ Evidence: `app/main.py`, `app/erp.py`, `app/repository.py`, `infra/main.tf`
 - PO、收料、短缺異常、庫存、Dashboard
 - DynamoDB transaction 與 `Idempotency-Key`
 - API Gateway HTTP API → Lambda ZIP
-- SNS / application log alert
+- DynamoDB pending alert outbox + EventBridge replay worker → SNS / application log
+- Optional JWT authorizer、explicit CORS origins、`X-Request-Id` correlation header
 
 ## TARGET / README roadmap
 
@@ -63,10 +64,11 @@ Lambda Python 3.12 → Mangum → FastAPI routes
         ▼
 ErpStore：validation / state transition / alert decision
         ├── Repository → DynamoDB (AWS) / InMemory (local)
-        └── AlertPublisher → SNS (AWS) / logging (local)
+        ├── Alert outbox → DynamoDB (same transaction)
+        └── Alert worker → SNS (AWS) / logging (local)
 ```
 
-旁路：Lambda 基本執行記錄 → CloudWatch Log Group。
+旁路：EventBridge 每分鐘觸發 alert worker；Lambda 基本執行記錄 → CloudWatch Log Group。
 
 ---
 
@@ -79,7 +81,8 @@ ErpStore：validation / state transition / alert decision
   → 比對訂購量 / 剩餘待收量
   → 寫入 Receipt + PO + Inventory + InventoryTransaction
   → 正常：已完成；短缺：待處理異常
-  → 低於 reorder_point 或有短缺 → SNS / log alert
+  → 低於 reorder_point 或有短缺 → pending alert outbox
+  → alert worker 重試 → SNS / log alert
 ```
 
 異常處置：`補貨` → `待補貨`；`差異允收結案` → `差異結案`。
@@ -94,6 +97,7 @@ ErpStore：validation / state transition / alert decision
 | `ReceiptResult` | 每次收料結果、異常、操作人、時間 |
 | `InventoryItem` | 目前庫存與 `reorder_point` |
 | `InventoryTransaction` | 每筆庫存異動的 audit trail |
+| Alert batch | 收料異常與低庫存通知的 pending/replay 狀態 |
 | Idempotency record | key、request hash、receipt_id，防重複收料 |
 
 DynamoDB key pattern：`PK=<entity>#<id>`, `SK=META`；以單表保存多種 entity。
@@ -102,10 +106,11 @@ DynamoDB key pattern：`PK=<entity>#<id>`, `SK=META`；以單表保存多種 ent
 
 # 可靠性設計
 
-1. **Atomic write**：`TransactWriteItems` 一次提交收料結果、PO、庫存、異動與 idempotency。
+1. **Atomic write**：`TransactWriteItems` 一次提交收料結果、PO、庫存、異動、idempotency 與 alert outbox。
 2. **Retry safe**：同一 key + 同一 payload 回傳原結果；同 key 不同 payload 回 `409`。
 3. **Concurrent update safe**：PO / inventory 使用 previous data condition，衝突要求重新整理。
 4. **Contract validation**：Pydantic 限制數量、品項完整性、重複料號與異常處置輸入。
+5. **Notification retry**：SNS 失敗不回滾收料，pending batch 由 worker 重試。
 
 Evidence: `app/repository.py:260-354`, `app/erp.py:253-336`, `app/main.py:59-82`
 
@@ -117,7 +122,7 @@ Evidence: `app/repository.py:260-354`, `app/erp.py:253-336`, `app/main.py:59-82`
 | --- | --- | --- |
 | GET | `/api/dashboard` | KPI 摘要 |
 | GET/POST | `/api/purchase-orders` | 查詢 / 建立 PO |
-| POST | `/api/receipts` | 收料、更新庫存、發布警示 |
+| POST | `/api/receipts` | 收料、更新庫存、排入警示 |
 | POST | `/api/purchase-orders/{po_id}/exception-resolution` | 補貨或差異允收結案 |
 | GET | `/api/inventory` | 查詢庫存 |
 | GET | `/api/inventory-transactions` | 查詢庫存異動 |
@@ -141,13 +146,14 @@ infra/.lambda-build/lambda.zip
 terraform apply
               │
               ├── API Gateway HTTP API
-              ├── Lambda + IAM role
+              ├── API Lambda + alert worker Lambda + IAM role
               ├── DynamoDB PAY_PER_REQUEST
-              ├── SNS topic
-              └── CloudWatch Log Group
+              ├── EntityIndex、PITR、伺服器端加密、deletion protection
+              ├── SNS topic + EventBridge 每分鐘重試排程
+              └── CloudWatch Log Groups（可設定 retention）
 ```
 
-目前沒有 Cognito、CloudFront、S3 frontend、SQS worker、CloudWatch Alarms。
+目前仍沒有 Cognito user pool、CloudFront、S3 frontend、SQS Excel worker 與 CloudWatch Alarms；API JWT authorizer 需提供既有 issuer/audience。
 
 ---
 
@@ -159,10 +165,13 @@ terraform apply
 | `app/erp.py` | Domain model、收料與異常狀態轉換 |
 | `app/repository.py` | InMemory / DynamoDB adapter、transaction writes |
 | `app/alerts.py` | Logging / SNS publisher |
+| `app/alert_worker.py` | Pending alert replay Lambda handler |
+| `app/config.py` | Environment 與 production safety guard |
+| `app/mcp_server.py` | ERP approval-gated MCP stdio adapter |
 | `web/index.html` | Dashboard UI、API client |
 | `scripts/build_lambda.sh` | Lambda ZIP package |
 | `infra/main.tf` | AWS resource graph、IAM、environment variables |
-| `tests/` | API、domain、rule tests |
+| `tests/` | API、domain、configuration、MCP tests |
 
 **結論：**不是 AWS SAM/CDK；是 **FastAPI + Mangum + Terraform** 的 serverless application。
 
@@ -170,9 +179,9 @@ terraform apply
 
 # 下一步：MVP → production ERP
 
-1. 加入 Cognito / JWT 與 warehouse、purchaser、approver 角色。
+1. 接上 Cognito / JWT 與 warehouse、purchaser、approver 角色。
 2. 建立 private S3、pre-signed URL、SQS retry worker。
-3. 補 structured logs、correlation id、CloudWatch Alarms 與 retention policy。
+3. 補 structured logs、CloudWatch Alarms 與正式通知訂閱管理。
 4. 決定 ZIP 或 container image 單一路徑，接上 CI/CD approval。
 
 ## Takeaway
