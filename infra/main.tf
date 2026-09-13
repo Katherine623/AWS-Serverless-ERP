@@ -25,6 +25,16 @@ resource "terraform_data" "auth_config" {
       )
       error_message = "cognito_issuer_url and cognito_audience are required when API auth is enabled."
     }
+
+    precondition {
+      condition     = var.erp_environment != "production" || var.api_auth_enabled
+      error_message = "api_auth_enabled must be true in production."
+    }
+
+    precondition {
+      condition     = var.erp_environment != "production" || !var.seed_demo
+      error_message = "seed_demo must be false in production."
+    }
   }
 }
 
