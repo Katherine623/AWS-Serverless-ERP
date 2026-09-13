@@ -22,19 +22,19 @@ logger = logging.getLogger(__name__)
 
 
 class PurchaseOrderItem(BaseModel):
-    material_id: str
-    material_name: str
+    material_id: str = Field(min_length=1, max_length=80)
+    material_name: str = Field(min_length=1, max_length=160)
     ordered_quantity: int = Field(gt=0)
     received_quantity: int = Field(default=0, ge=0)
-    unit: str = "pcs"
+    unit: str = Field(default="pcs", min_length=1, max_length=20)
 
 class CreatePurchaseOrderItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    material_id: str
-    material_name: str
+    material_id: str = Field(min_length=1, max_length=80)
+    material_name: str = Field(min_length=1, max_length=160)
     ordered_quantity: int = Field(gt=0)
-    unit: str = "pcs"
+    unit: str = Field(default="pcs", min_length=1, max_length=20)
 
 
 class PurchaseOrder(BaseModel):
@@ -59,8 +59,10 @@ class PurchaseOrder(BaseModel):
 
 
 class CreatePurchaseOrderRequest(BaseModel):
-    po_id: str
-    supplier_name: str
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    po_id: str = Field(min_length=1, max_length=80)
+    supplier_name: str = Field(min_length=1, max_length=160)
     expected_date: date
     items: list[CreatePurchaseOrderItem] = Field(min_length=1, max_length=48)
 
@@ -73,14 +75,16 @@ class CreatePurchaseOrderRequest(BaseModel):
 
 
 class ReceiptItem(BaseModel):
-    material_id: str
+    material_id: str = Field(min_length=1, max_length=80)
     received_quantity: int = Field(ge=0)
 
 
 class ReceiptRequest(BaseModel):
-    po_id: str
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    po_id: str = Field(min_length=1, max_length=80)
     items: list[ReceiptItem] = Field(min_length=1, max_length=48)
-    received_by: str = "warehouse-user"
+    received_by: str = Field(default="warehouse-user", min_length=1, max_length=120)
 
     @model_validator(mode="after")
     def validate_nonzero_receipt(self) -> ReceiptRequest:
@@ -99,6 +103,8 @@ class ReceiptResult(BaseModel):
 
 
 class ResolveExceptionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
     action: str = Field(pattern="^(補貨|差異允收結案)$")
     resolved_by: str = Field(min_length=1)
     note: str = Field(min_length=1, max_length=500)
@@ -116,11 +122,11 @@ class InventoryTransaction(BaseModel):
 
 
 class InventoryItem(BaseModel):
-    material_id: str
-    material_name: str
-    quantity: int
-    unit: str = "pcs"
-    reorder_point: int = 10
+    material_id: str = Field(min_length=1, max_length=80)
+    material_name: str = Field(min_length=1, max_length=160)
+    quantity: int = Field(ge=0)
+    unit: str = Field(default="pcs", min_length=1, max_length=20)
+    reorder_point: int = Field(default=10, ge=0)
     updated_at: datetime
 
 
