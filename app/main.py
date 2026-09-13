@@ -69,7 +69,7 @@ def create_purchase_order(request: CreatePurchaseOrderRequest) -> PurchaseOrder:
 @app.post("/api/receipts", response_model=ReceiptResult, status_code=201)
 def receive_purchase_order(
     request: ReceiptRequest,
-    idempotency_key: str = Header(min_length=8, alias="Idempotency-Key"),
+    idempotency_key: str = Header(min_length=8, max_length=128, alias="Idempotency-Key"),
 ) -> ReceiptResult:
     try:
         return store.receive(request, idempotency_key=idempotency_key)
