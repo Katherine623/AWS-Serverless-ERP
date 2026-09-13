@@ -793,6 +793,40 @@ resource "aws_cloudwatch_metric_alarm" "alert_worker_errors" {
   tags                = var.tags
 }
 
+resource "aws_cloudwatch_metric_alarm" "import_worker_errors" {
+  count               = var.enable_excel_import ? 1 : 0
+  alarm_name          = "${var.project_name}-import-worker-errors"
+  alarm_description   = "Excel import worker returned one or more errors in five minutes."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.erp_ops.arn]
+  dimensions          = { FunctionName = aws_lambda_function.import_worker[0].function_name }
+  tags                = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "import_dlq_messages" {
+  count               = var.enable_excel_import ? 1 : 0
+  alarm_name          = "${var.project_name}-import-dlq-messages"
+  alarm_description   = "Excel import messages reached the dead-letter queue."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.erp_ops.arn]
+  dimensions          = { QueueName = aws_sqs_queue.imports_dlq[0].name }
+  tags                = var.tags
+}
+
 resource "aws_cloudwatch_metric_alarm" "api_gateway_5xx" {
   alarm_name          = "${var.project_name}-api-gateway-5xx"
   alarm_description   = "HTTP API returned one or more 5xx responses in five minutes."
