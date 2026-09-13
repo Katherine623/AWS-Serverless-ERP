@@ -115,6 +115,12 @@ resource "aws_cloudwatch_log_group" "alert_worker" {
   tags              = var.tags
 }
 
+resource "aws_cloudwatch_log_group" "api_gateway" {
+  name              = "/aws/apigateway/${var.project_name}"
+  retention_in_days = var.log_retention_days
+  tags              = var.tags
+}
+
 resource "aws_sns_topic" "erp_alerts" {
   name = "${var.project_name}-alerts"
   tags = var.tags
@@ -276,6 +282,17 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"
   auto_deploy = true
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_gateway.arn
+    format = jsonencode({
+      requestId        = "$context.requestId"
+      routeKey         = "$context.routeKey"
+      status           = "$context.status"
+      requestTime      = "$context.requestTime"
+      integrationError = "$context.integrationErrorMessage"
+    })
+  }
 }
 
 resource "aws_lambda_permission" "api_gateway" {
