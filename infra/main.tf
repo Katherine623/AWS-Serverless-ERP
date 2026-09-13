@@ -167,13 +167,15 @@ resource "aws_cloudwatch_log_group" "api_gateway" {
 }
 
 resource "aws_sns_topic" "erp_alerts" {
-  name = "${var.project_name}-alerts"
-  tags = var.tags
+  name              = "${var.project_name}-alerts"
+  kms_master_key_id = "alias/aws/sns"
+  tags              = var.tags
 }
 
 resource "aws_sns_topic" "erp_ops" {
-  name = "${var.project_name}-ops"
-  tags = var.tags
+  name              = "${var.project_name}-ops"
+  kms_master_key_id = "alias/aws/sns"
+  tags              = var.tags
 }
 
 resource "aws_iam_role_policy" "lambda_alerts" {
