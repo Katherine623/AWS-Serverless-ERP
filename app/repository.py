@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import time
 from typing import Any, Protocol
@@ -29,7 +30,7 @@ def _decode_cursor(cursor: str | None) -> dict[str, Any] | None:
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         value = json.loads(base64.urlsafe_b64decode(padded).decode())
-    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (binascii.Error, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("cursor 格式無效") from exc
     if not isinstance(value, dict):
         raise ValueError("cursor 格式無效")

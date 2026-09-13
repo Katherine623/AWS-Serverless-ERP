@@ -7,7 +7,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from mangum import Mangum
 
 from app.auth import Actor, get_current_actor, require_roles
@@ -47,9 +47,23 @@ async def add_request_id(request: Request, call_next):
         if REQUEST_ID_PATTERN.fullmatch(candidate)
         else f"req-{uuid4().hex}"
     )
+    request.state.request_id = request_id
     response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
     return response
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", f"req-{uuid4().hex}")
+    logger.exception(
+        "Unhandled ERP request failure", extra={"request_id": request_id}, exc_info=exc
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "request_id": request_id},
+        headers={"X-Request-Id": request_id},
+    )
 
 
 @app.get("/", include_in_schema=False)
