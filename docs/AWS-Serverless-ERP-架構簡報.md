@@ -40,13 +40,14 @@ Evidence: `app/main.py`, `app/erp.py`, `app/repository.py`, `infra/main.tf`
 - API Gateway HTTP API → Lambda ZIP
 - DynamoDB pending alert outbox + EventBridge replay worker → SNS / application log
 - Optional JWT authorizer、explicit CORS origins、`X-Request-Id` correlation header
+- 可用／隔離庫存、退貨／報廢調整與 cursor pagination
 
-## TARGET / README roadmap
+## CURRENT optional deployment / remaining roadmap
 
-- CloudFront + S3 frontend
-- S3 Excel import + SQS retry worker
-- Cognito 權限、pre-signed URL
-- CloudWatch Alarms、正式通知流程
+- Optional CloudFront + private S3 frontend
+- Optional S3 Excel import + SQS retry worker + DLQ
+- Optional managed Cognito pool、groups、pre-signed URL
+- Remaining: custom domain certificate、WAF、正式通知訂閱流程
 
 > Dockerfile 仍存在，但目前 `infra/main.tf` 使用 `.lambda-build/lambda.zip`，以 ZIP 部署為準。
 
@@ -124,6 +125,8 @@ Evidence: `app/repository.py:260-354`, `app/erp.py:253-336`, `app/main.py:59-82`
 | GET | `/api/dashboard` | KPI 摘要 |
 | GET/POST | `/api/purchase-orders` | 查詢 / 建立 PO |
 | POST | `/api/receipts` | 收料、更新庫存、排入警示 |
+| POST | `/api/inventory-adjustments` | 盤點調整、退貨、報廢 |
+| POST | `/api/imports/excel/upload-url` | XLSX 預簽名上傳 |
 | POST | `/api/purchase-orders/{po_id}/exception-resolution` | 補貨或差異允收結案 |
 | GET | `/api/inventory` | 查詢庫存 |
 | GET | `/api/inventory-transactions` | 查詢庫存異動 |
@@ -154,7 +157,7 @@ terraform apply
               └── CloudWatch Log Groups（可設定 retention）
 ```
 
-目前仍沒有 Cognito user pool、CloudFront、S3 frontend、SQS Excel worker 與 CloudWatch Alarms；API JWT authorizer 需提供既有 issuer/audience。
+Terraform 可選建立 Cognito user pool、私有 S3 + CloudFront、S3 → SQS → Lambda XLSX import pipeline；API JWT authorizer 也可使用既有 issuer/audience。正式自訂網域憑證與實際 Cognito 使用者佈建仍需環境設定。
 
 ---
 
@@ -167,6 +170,8 @@ terraform apply
 | `app/repository.py` | InMemory / DynamoDB adapter、transaction writes |
 | `app/alerts.py` | Logging / SNS publisher |
 | `app/alert_worker.py` | Pending alert replay Lambda handler |
+| `app/import_worker.py` | S3 XLSX → SQS Lambda import worker |
+| `app/auth.py` | JWT actor 與 ERP role guard |
 | `app/config.py` | Environment 與 production safety guard |
 | `app/mcp_server.py` | ERP approval-gated MCP stdio adapter |
 | `web/index.html` | Dashboard UI、API client |
@@ -180,10 +185,10 @@ terraform apply
 
 # 下一步：MVP → production ERP
 
-1. 接上 Cognito / JWT 與 warehouse、purchaser、approver 角色。
-2. 建立 private S3、pre-signed URL、SQS retry worker。
-3. 補 structured logs、CloudWatch Alarms 與正式通知訂閱管理。
-4. 決定 ZIP 或 container image 單一路徑，接上 CI/CD approval。
+1. 建立正式 Cognito 使用者佈建、custom domain 與角色生命週期。
+2. 補 structured logs、正式通知訂閱管理與 WAF。
+3. 將 ZIP build 接上 CI/CD deploy approval、SBOM 與 IaC security scan。
+4. 擴充 QC、退貨核准與 PO / GRN / Invoice 三方匹配。
 
 ## Takeaway
 
