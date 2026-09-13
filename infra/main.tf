@@ -463,6 +463,22 @@ resource "aws_s3_bucket_versioning" "frontend" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "frontend" {
+  count  = var.enable_frontend_cdn ? 1 : 0
+  bucket = aws_s3_bucket.frontend[0].id
+
+  rule {
+    id     = "expire-old-frontend-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+
 resource "aws_s3_object" "frontend_index" {
   count        = var.enable_frontend_cdn ? 1 : 0
   bucket       = aws_s3_bucket.frontend[0].id
