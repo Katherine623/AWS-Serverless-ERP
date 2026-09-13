@@ -22,6 +22,16 @@ def _normalise_date(value: object) -> str:
     return str(value).strip()
 
 
+def _required_cell_value(row: tuple[object, ...], index: int, field: str) -> object:
+    if index >= len(row) or row[index] is None or not str(row[index]).strip():
+        raise ValueError(f"Excel 欄位 {field} 不可為空")
+    return row[index]
+
+
+def _required_cell(row: tuple[object, ...], index: int, field: str) -> str:
+    return str(_required_cell_value(row, index, field)).strip()
+
+
 def _import_workbook(bucket: str, key: str) -> int:
     from openpyxl import load_workbook
 
@@ -47,22 +57,32 @@ def _import_workbook(bucket: str, key: str) -> int:
         for row in rows:
             if not any(value is not None and str(value).strip() for value in row):
                 continue
-            po_id = str(row[index["po_id"]]).strip()
+            po_id = _required_cell(row, index["po_id"], "po_id")
             order = grouped.setdefault(
                 po_id,
                 {
                     "po_id": po_id,
-                    "supplier_name": str(row[index["supplier_name"]]).strip(),
-                    "expected_date": _normalise_date(row[index["expected_date"]]),
+                    "supplier_name": _required_cell(
+                        row, index["supplier_name"], "supplier_name"
+                    ),
+                    "expected_date": _normalise_date(
+                        _required_cell_value(row, index["expected_date"], "expected_date")
+                    ),
                     "items": [],
                 },
             )
             order["items"].append(
                 {
-                    "material_id": str(row[index["material_id"]]).strip(),
-                    "material_name": str(row[index["material_name"]]).strip(),
-                    "ordered_quantity": int(row[index["ordered_quantity"]]),
-                    "unit": str(row[index.get("unit", -1)] or "pcs").strip()
+                    "material_id": _required_cell(
+                        row, index["material_id"], "material_id"
+                    ),
+                    "material_name": _required_cell(
+                        row, index["material_name"], "material_name"
+                    ),
+                    "ordered_quantity": int(
+                        _required_cell(row, index["ordered_quantity"], "ordered_quantity")
+                    ),
+                    "unit": (str(row[index["unit"]] or "").strip() or "pcs")
                     if "unit" in index
                     else "pcs",
                 }
@@ -100,6 +120,8 @@ def handler(event: dict, context: object) -> dict[str, list[dict[str, str]]]:
             for s3_record in message.get("Records", []):
                 bucket = s3_record["s3"]["bucket"]["name"]
                 key = unquote_plus(s3_record["s3"]["object"]["key"])
+                if not key.startswith("incoming/") or not key.lower().endswith(".xlsx"):
+                    raise ValueError("只允許匯入 incoming/ 下的 .xlsx 檔案")
                 imported = _import_workbook(bucket, key)
                 logger.info("Imported %s purchase orders from s3://%s/%s", imported, bucket, key)
         except Exception:

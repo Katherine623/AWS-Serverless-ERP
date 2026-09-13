@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime
 from types import SimpleNamespace
 
@@ -14,6 +15,33 @@ def test_import_worker_reports_malformed_sqs_message_for_retry() -> None:
     result = handler({"Records": [{"messageId": "bad-1", "body": "not-json"}]}, None)
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "bad-1"}]}
+
+
+def test_import_worker_rejects_objects_outside_incoming_prefix() -> None:
+    result = handler(
+        {
+            "Records": [
+                {
+                    "messageId": "bad-key-1",
+                    "body": json.dumps(
+                        {
+                            "Records": [
+                                {
+                                    "s3": {
+                                        "bucket": {"name": "imports"},
+                                        "object": {"key": "other/file.xlsx"},
+                                    }
+                                }
+                            ]
+                        }
+                    ),
+                }
+            ]
+        },
+        None,
+    )
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "bad-key-1"}]}
 
 
 def test_excel_upload_url_is_scoped_to_xlsx_object(monkeypatch) -> None:

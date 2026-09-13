@@ -32,8 +32,8 @@ class InventoryNotFoundError(ValueError):
 class PurchaseOrderItem(BaseModel):
     material_id: str = Field(min_length=1, max_length=80)
     material_name: str = Field(min_length=1, max_length=160)
-    ordered_quantity: int = Field(gt=0)
-    received_quantity: int = Field(default=0, ge=0)
+    ordered_quantity: int = Field(gt=0, le=1_000_000_000)
+    received_quantity: int = Field(default=0, ge=0, le=1_000_000_000)
     unit: str = Field(default="pcs", min_length=1, max_length=20)
 
 class CreatePurchaseOrderItem(BaseModel):
@@ -41,7 +41,7 @@ class CreatePurchaseOrderItem(BaseModel):
 
     material_id: str = Field(min_length=1, max_length=80)
     material_name: str = Field(min_length=1, max_length=160)
-    ordered_quantity: int = Field(gt=0)
+    ordered_quantity: int = Field(gt=0, le=1_000_000_000)
     unit: str = Field(default="pcs", min_length=1, max_length=20)
 
 
@@ -84,7 +84,7 @@ class CreatePurchaseOrderRequest(BaseModel):
 
 class ReceiptItem(BaseModel):
     material_id: str = Field(min_length=1, max_length=80)
-    received_quantity: int = Field(ge=0)
+    received_quantity: int = Field(ge=0, le=1_000_000_000)
 
 
 class ReceiptRequest(BaseModel):
@@ -156,7 +156,7 @@ class ResolveExceptionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     action: str = Field(pattern="^(補貨|差異允收結案)$")
-    resolved_by: str = Field(min_length=1)
+    resolved_by: str = Field(min_length=1, max_length=120)
     note: str = Field(min_length=1, max_length=500)
 
 
