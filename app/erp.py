@@ -218,14 +218,15 @@ class ErpStore:
 
     def dashboard(self) -> DashboardSummary:
         with self._lock:
+            orders = self.repository.list_purchase_orders()
             completed = self.repository.completed_receipt_count()
             exceptions = self.repository.exception_count()
             pending = sum(
                 order.status in RECEIVABLE_STATUSES
-                for order in self.repository.list_purchase_orders()
+                for order in orders
             )
             return DashboardSummary(
-                total_purchase_orders=len(self.repository.list_purchase_orders()),
+                total_purchase_orders=len(orders),
                 pending_receipts=pending,
                 completed_receipts=completed,
                 exception_count=exceptions,
