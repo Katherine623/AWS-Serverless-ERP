@@ -1,7 +1,7 @@
 import pytest
 
 from app.erp import ErpStore, InventoryTransaction
-from app.repository import InMemoryRepository
+from app.repository import InMemoryRepository, _encode_cursor
 
 
 def test_in_memory_pages_return_opaque_cursor() -> None:
@@ -23,6 +23,8 @@ def test_invalid_page_cursor_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="cursor"):
         repository.list_inventory_page(10, "not-a-cursor")
+    with pytest.raises(ValueError, match="cursor"):
+        repository.list_inventory_page(10, _encode_cursor({"offset": None}))
 
 
 def test_page_filters_are_applied_and_cursor_is_bound_to_filter() -> None:

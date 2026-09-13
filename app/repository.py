@@ -277,7 +277,10 @@ class InMemoryRepository:
         decoded = _decode_cursor(cursor)
         if decoded and decoded.get("scope") not in {None, scope}:
             raise ValueError("cursor 與篩選條件不一致")
-        offset = int(decoded.get("offset", 0)) if decoded else 0
+        raw_offset = decoded.get("offset", 0) if decoded else 0
+        if isinstance(raw_offset, bool) or not isinstance(raw_offset, int):
+            raise ValueError("cursor 格式無效")
+        offset = raw_offset
         if offset < 0:
             raise ValueError("cursor 格式無效")
         page = items[offset : offset + limit]
@@ -486,7 +489,12 @@ class DynamoDbRepository:
             if scope and decoded.get("scope") not in {None, scope}:
                 raise ValueError("cursor 與篩選條件不一致")
             exclusive_start_key = decoded.get("last_evaluated_key")
-            if not isinstance(exclusive_start_key, dict):
+            if not isinstance(exclusive_start_key, dict) or not {
+                "PK",
+                "SK",
+                "entity",
+                "entity_key",
+            }.issubset(exclusive_start_key):
                 raise ValueError("cursor 格式無效")
             kwargs["ExclusiveStartKey"] = exclusive_start_key
         kwargs["KeyConditionExpression"] = key_condition or Key("entity").eq(entity)
