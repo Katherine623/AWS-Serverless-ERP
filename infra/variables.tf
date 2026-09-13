@@ -107,6 +107,28 @@ variable "cors_allowed_origins" {
   default     = []
 }
 
+variable "api_rate_limit" {
+  description = "Steady-state requests per second allowed by the HTTP API stage."
+  type        = number
+  default     = 50
+
+  validation {
+    condition     = var.api_rate_limit > 0
+    error_message = "api_rate_limit must be greater than zero."
+  }
+}
+
+variable "api_burst_limit" {
+  description = "Burst requests allowed by the HTTP API stage."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.api_burst_limit >= var.api_rate_limit
+    error_message = "api_burst_limit must be at least api_rate_limit."
+  }
+}
+
 variable "tags" {
   description = "Tags applied to managed AWS resources."
   type        = map(string)
