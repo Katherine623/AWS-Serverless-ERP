@@ -475,6 +475,6 @@ def create_repository() -> ErpRepository:
     table_name = settings.dynamodb_table_name
     if table_name:
         return DynamoDbRepository(table_name)
-    if settings.environment == "production":
-        raise RuntimeError("DynamoDB repository is required in production")
+    if settings.environment in {"staging", "production"}:
+        raise RuntimeError("DynamoDB repository is required in staging/production")
     return InMemoryRepository()

@@ -20,6 +20,8 @@ AWS Serverless ERP 物料點收管理平台，將採購單、到貨驗收、異�
 - DynamoDB 持久化與收料 idempotency（設定 `ERP_DYNAMODB_TABLE_NAME` 後啟用）
 - Pending alert outbox 與每分鐘重試 worker
 
+`local` / `test` 才允許 demo seed 與 InMemory repository；`staging` / `production` 必須設定 DynamoDB 且禁止 demo seed。
+
 ## AWS 警示系統
 
 每次送出 `POST /api/receipts` 後，系統會檢查：

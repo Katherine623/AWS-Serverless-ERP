@@ -32,8 +32,8 @@ resource "terraform_data" "auth_config" {
     }
 
     precondition {
-      condition     = var.erp_environment != "production" || !var.seed_demo
-      error_message = "seed_demo must be false in production."
+      condition     = contains(["local", "test"], var.erp_environment) || !var.seed_demo
+      error_message = "seed_demo must be false in staging and production."
     }
   }
 }

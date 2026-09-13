@@ -28,3 +28,11 @@ def test_production_rejects_demo_seed(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(ConfigurationError, match="ERP_SEED_DEMO"):
         Settings.from_environment()
+
+
+def test_staging_requires_persistent_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ERP_ENVIRONMENT", "staging")
+    monkeypatch.delenv("ERP_DYNAMODB_TABLE_NAME", raising=False)
+
+    with pytest.raises(ConfigurationError, match="DYNAMODB_TABLE_NAME"):
+        Settings.from_environment()

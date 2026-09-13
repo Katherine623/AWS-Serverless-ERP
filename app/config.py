@@ -39,11 +39,11 @@ class Settings:
             os.getenv("ERP_SEED_DEMO"), default=environment in {"local", "test"}
         )
         table_name = os.getenv("ERP_DYNAMODB_TABLE_NAME") or None
-        if environment == "production" and seed_demo:
-            raise ConfigurationError("ERP_SEED_DEMO must be false in production")
-        if environment == "production" and not table_name:
+        if environment in {"staging", "production"} and seed_demo:
+            raise ConfigurationError("ERP_SEED_DEMO must be false outside local/test")
+        if environment in {"staging", "production"} and not table_name:
             raise ConfigurationError(
-                "ERP_DYNAMODB_TABLE_NAME is required in production"
+                "ERP_DYNAMODB_TABLE_NAME is required in staging/production"
             )
         return cls(
             environment=environment,
