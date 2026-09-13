@@ -70,18 +70,20 @@ uvicorn app.main:app --reload
 | GET | `/health` / `/ready` | Liveness / DynamoDB readiness |
 | GET | `/api/dashboard` | ERP KPI 摘要 |
 | GET | `/api/purchase-orders` | 查詢採購單 |
-| GET | `/api/v2/purchase-orders?limit=50&cursor=...` | 分頁查詢採購單 |
+| GET | `/api/v2/purchase-orders?limit=50&cursor=...&status=待驗收&supplier_name=...` | 分頁、狀態與供應商篩選 |
 | POST | `/api/purchase-orders` | 建立採購單 |
 | POST | `/api/receipts` | 送出驗收並更新庫存 |
 | POST | `/api/inventory-adjustments` | 盤點調整、退貨或報廢（需要 Idempotency-Key） |
 | POST | `/api/imports/excel/upload-url` | 取得 XLSX 預簽名上傳 URL |
 | POST | `/api/purchase-orders/{po_id}/exception-resolution` | 補貨或差異允收結案 |
 | GET | `/api/inventory` | 查詢庫存 |
-| GET | `/api/v2/inventory?limit=50&cursor=...` | 分頁查詢庫存 |
+| GET | `/api/v2/inventory?limit=50&cursor=...&material_id=...&low_stock=true` | 分頁、料號與低庫存篩選 |
 | GET | `/api/inventory-transactions` | 查詢庫存異動 |
-| GET | `/api/v2/inventory-transactions?limit=50&cursor=...` | 分頁查詢庫存異動 |
+| GET | `/api/v2/inventory-transactions?limit=50&cursor=...&material_id=...&transaction_type=報廢` | 分頁、料號與異動類型篩選 |
 
 收料 API 需要 `Idempotency-Key` header；超收會建立異常，必須使用「差異允收結案」才能關閉。
+
+v2 cursor 是 opaque token，且會綁定當次篩選條件；拿不同 `status`、`material_id` 或其他 filter 重用 cursor 會收到 `400`，避免跨查詢跳頁。
 
 ## ERP MCP
 

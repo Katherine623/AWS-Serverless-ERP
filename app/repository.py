@@ -49,7 +49,12 @@ class ErpRepository(Protocol):
         ...
 
     def list_purchase_orders_page(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        status: str | None = None,
+        supplier_name: str | None = None,
     ) -> tuple[list[Any], str | None]:
         ...
 
@@ -63,7 +68,12 @@ class ErpRepository(Protocol):
         ...
 
     def list_inventory_page(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        material_id: str | None = None,
+        low_stock: bool = False,
     ) -> tuple[list[Any], str | None]:
         ...
 
@@ -74,7 +84,12 @@ class ErpRepository(Protocol):
         ...
 
     def list_inventory_transactions_page(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        material_id: str | None = None,
+        transaction_type: str | None = None,
     ) -> tuple[list[Any], str | None]:
         ...
 
@@ -167,9 +182,19 @@ class InMemoryRepository:
         return list(self.purchase_orders.values())
 
     def list_purchase_orders_page(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        status: str | None = None,
+        supplier_name: str | None = None,
     ) -> tuple[list[Any], str | None]:
-        return self._page(list(self.purchase_orders.values()), limit, cursor)
+        items = sorted(self.purchase_orders.values(), key=lambda item: item.po_id)
+        if status:
+            items = [item for item in items if item.status == status]
+        if supplier_name:
+            items = [item for item in items if item.supplier_name == supplier_name]
+        return self._page(items, limit, cursor, scope=self._scope(status, supplier_name))
 
     def create_purchase_order(self, order: Any) -> Any:
         if order.po_id in self.purchase_orders:
@@ -184,9 +209,19 @@ class InMemoryRepository:
         return list(self.inventory.values())
 
     def list_inventory_page(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        material_id: str | None = None,
+        low_stock: bool = False,
     ) -> tuple[list[Any], str | None]:
-        return self._page(list(self.inventory.values()), limit, cursor)
+        items = sorted(self.inventory.values(), key=lambda item: item.material_id)
+        if material_id:
+            items = [item for item in items if item.material_id == material_id]
+        if low_stock:
+            items = [item for item in items if item.quantity <= item.reorder_point]
+        return self._page(items, limit, cursor, scope=self._scope(material_id, low_stock))
 
     def get_inventory(self, material_id: str) -> Any | None:
         return self.inventory.get(material_id)
@@ -195,19 +230,49 @@ class InMemoryRepository:
         return list(self.inventory_transactions.values())
 
     def list_inventory_transactions_page(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        material_id: str | None = None,
+        transaction_type: str | None = None,
     ) -> tuple[list[Any], str | None]:
-        return self._page(list(self.inventory_transactions.values()), limit, cursor)
+        items = sorted(
+            self.inventory_transactions.values(),
+            key=lambda item: item.transaction_id,
+        )
+        if material_id:
+            items = [item for item in items if item.material_id == material_id]
+        if transaction_type:
+            items = [item for item in items if item.transaction_type == transaction_type]
+        return self._page(
+            items,
+            limit,
+            cursor,
+            scope=self._scope(material_id, transaction_type),
+        )
 
     @staticmethod
-    def _page(items: list[Any], limit: int, cursor: str | None) -> tuple[list[Any], str | None]:
+    def _scope(*values: Any) -> str:
+        return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _page(
+        items: list[Any],
+        limit: int,
+        cursor: str | None,
+        *,
+        scope: str,
+    ) -> tuple[list[Any], str | None]:
         decoded = _decode_cursor(cursor)
+        if decoded and decoded.get("scope") not in {None, scope}:
+            raise ValueError("cursor 與篩選條件不一致")
         offset = int(decoded.get("offset", 0)) if decoded else 0
         if offset < 0:
             raise ValueError("cursor 格式無效")
         page = items[offset : offset + limit]
         next_cursor = (
-            _encode_cursor({"offset": offset + limit})
+            _encode_cursor({"offset": offset + limit, "scope": scope})
             if offset + limit < len(items)
             else None
         )
@@ -393,23 +458,73 @@ class DynamoDbRepository:
         return items
 
     def _query_page(
-        self, entity: str, limit: int, cursor: str | None
+        self,
+        entity: str,
+        limit: int,
+        cursor: str | None,
+        *,
+        key_condition: Any | None = None,
+        filter_expression: Any | None = None,
+        expression_attribute_names: dict[str, str] | None = None,
+        expression_attribute_values: dict[str, Any] | None = None,
+        predicate: Any | None = None,
+        scope: str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         kwargs: dict[str, Any] = {"Limit": limit}
         decoded = _decode_cursor(cursor)
         if decoded:
+            if scope and decoded.get("scope") not in {None, scope}:
+                raise ValueError("cursor 與篩選條件不一致")
             exclusive_start_key = decoded.get("last_evaluated_key")
             if not isinstance(exclusive_start_key, dict):
                 raise ValueError("cursor 格式無效")
             kwargs["ExclusiveStartKey"] = exclusive_start_key
-        response = self._table.query(
-            IndexName="EntityIndex",
-            KeyConditionExpression=Key("entity").eq(entity),
-            **kwargs,
-        )
-        last_key = response.get("LastEvaluatedKey")
-        next_cursor = _encode_cursor({"last_evaluated_key": last_key}) if last_key else None
-        return response.get("Items", []), next_cursor
+        kwargs["KeyConditionExpression"] = key_condition or Key("entity").eq(entity)
+        if filter_expression is not None:
+            kwargs["FilterExpression"] = filter_expression
+        if expression_attribute_names:
+            kwargs["ExpressionAttributeNames"] = expression_attribute_names
+        if expression_attribute_values:
+            kwargs["ExpressionAttributeValues"] = expression_attribute_values
+
+        matched: list[dict[str, Any]] = []
+        last_key: dict[str, Any] | None = None
+        while len(matched) < limit:
+            kwargs["Limit"] = limit - len(matched)
+            response = self._table.query(IndexName="EntityIndex", **kwargs)
+            items = response.get("Items", [])
+            if predicate:
+                items = [item for item in items if predicate(item)]
+            matched.extend(items)
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            kwargs["ExclusiveStartKey"] = last_key
+        cursor_payload = {"last_evaluated_key": last_key}
+        if scope:
+            cursor_payload["scope"] = scope
+        next_cursor = _encode_cursor(cursor_payload) if last_key else None
+        return matched, next_cursor
+
+    @staticmethod
+    def _json_field_needle(field: str, value: str) -> str:
+        return f'"{field}":{json.dumps(value, ensure_ascii=False, separators=(",", ":"))}'
+
+    @classmethod
+    def _data_filter(
+        cls,
+        filters: list[tuple[str, str]],
+    ) -> tuple[Any | None, dict[str, str], dict[str, Any]]:
+        if not filters:
+            return None, {}, {}
+        expressions: list[Any] = []
+        names = {"#data": "data"}
+        values: dict[str, Any] = {}
+        for index, (field, value) in enumerate(filters):
+            token = f":filter_{index}"
+            expressions.append(f"contains(#data, {token})")
+            values[token] = cls._json_field_needle(field, value)
+        return " AND ".join(expressions), names, values
 
     def _query_count(self, entity: str, **kwargs: Any) -> int:
         total = 0
@@ -441,9 +556,27 @@ class DynamoDbRepository:
         return [self._model(item, "PurchaseOrder") for item in items]
 
     def list_purchase_orders_page(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        status: str | None = None,
+        supplier_name: str | None = None,
     ) -> tuple[list[Any], str | None]:
-        items, next_cursor = self._query_page("purchase_order", limit, cursor)
+        filters = [("status", status), ("supplier_name", supplier_name)]
+        expression, names, values = self._data_filter(
+            [(field, value) for field, value in filters if value]
+        )
+        scope = json.dumps(filters, ensure_ascii=False, separators=(",", ":"))
+        items, next_cursor = self._query_page(
+            "purchase_order",
+            limit,
+            cursor,
+            filter_expression=expression,
+            expression_attribute_names=names,
+            expression_attribute_values=values,
+            scope=scope,
+        )
         return [self._model(item, "PurchaseOrder") for item in items], next_cursor
 
     def create_purchase_order(self, order: Any) -> Any:
@@ -473,9 +606,30 @@ class DynamoDbRepository:
         return [self._model(item, "InventoryItem") for item in items]
 
     def list_inventory_page(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        material_id: str | None = None,
+        low_stock: bool = False,
     ) -> tuple[list[Any], str | None]:
-        items, next_cursor = self._query_page("inventory", limit, cursor)
+        key_condition = Key("entity").eq("inventory")
+        if material_id:
+            key_condition = key_condition & Key("entity_key").eq(material_id)
+        scope = json.dumps([material_id, low_stock], ensure_ascii=False, separators=(",", ":"))
+        items, next_cursor = self._query_page(
+            "inventory",
+            limit,
+            cursor,
+            key_condition=key_condition,
+            predicate=(
+                lambda item: int(json.loads(item["data"]).get("quantity", 0))
+                <= int(json.loads(item["data"]).get("reorder_point", 0))
+                if low_stock
+                else True
+            ),
+            scope=scope,
+        )
         return [self._model(item, "InventoryItem") for item in items], next_cursor
 
     def get_inventory(self, material_id: str) -> Any | None:
@@ -488,9 +642,27 @@ class DynamoDbRepository:
         return [self._model(item, "InventoryTransaction") for item in items]
 
     def list_inventory_transactions_page(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        material_id: str | None = None,
+        transaction_type: str | None = None,
     ) -> tuple[list[Any], str | None]:
-        items, next_cursor = self._query_page("inventory_transaction", limit, cursor)
+        filters = [("material_id", material_id), ("transaction_type", transaction_type)]
+        expression, names, values = self._data_filter(
+            [(field, value) for field, value in filters if value]
+        )
+        scope = json.dumps(filters, ensure_ascii=False, separators=(",", ":"))
+        items, next_cursor = self._query_page(
+            "inventory_transaction",
+            limit,
+            cursor,
+            filter_expression=expression,
+            expression_attribute_names=names,
+            expression_attribute_values=values,
+            scope=scope,
+        )
         return [self._model(item, "InventoryTransaction") for item in items], next_cursor
 
     def receipt_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:

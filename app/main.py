@@ -109,10 +109,21 @@ def purchase_orders_page(
     actor: Annotated[Actor, Depends(get_current_actor)],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, max_length=1024),
+    status: str | None = Query(
+        default=None,
+        max_length=20,
+        pattern="^(待驗收|待處理異常|待補貨|已完成|差異結案)$",
+    ),
+    supplier_name: str | None = Query(default=None, max_length=160),
 ) -> PurchaseOrderPage:
     del actor
     try:
-        return store.list_purchase_orders_page(limit, cursor)
+        return store.list_purchase_orders_page(
+            limit,
+            cursor,
+            status=status,
+            supplier_name=supplier_name,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -216,10 +227,17 @@ def inventory_page(
     actor: Annotated[Actor, Depends(get_current_actor)],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, max_length=1024),
+    material_id: str | None = Query(default=None, max_length=80),
+    low_stock: bool = Query(default=False),
 ) -> InventoryPage:
     del actor
     try:
-        return store.list_inventory_page(limit, cursor)
+        return store.list_inventory_page(
+            limit,
+            cursor,
+            material_id=material_id,
+            low_stock=low_stock,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -237,10 +255,21 @@ def inventory_transactions_page(
     actor: Annotated[Actor, Depends(get_current_actor)],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, max_length=1024),
+    material_id: str | None = Query(default=None, max_length=80),
+    transaction_type: str | None = Query(
+        default=None,
+        max_length=20,
+        pattern="^(收料|差異允收|盤點調整|退貨|報廢)$",
+    ),
 ) -> InventoryTransactionPage:
     del actor
     try:
-        return store.list_inventory_transactions_page(limit, cursor)
+        return store.list_inventory_transactions_page(
+            limit,
+            cursor,
+            material_id=material_id,
+            transaction_type=transaction_type,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

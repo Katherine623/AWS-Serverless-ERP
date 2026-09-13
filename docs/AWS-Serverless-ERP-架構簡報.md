@@ -40,7 +40,8 @@ Evidence: `app/main.py`, `app/erp.py`, `app/repository.py`, `infra/main.tf`
 - API Gateway HTTP API → Lambda ZIP
 - DynamoDB pending alert outbox + EventBridge replay worker → SNS / application log
 - Optional JWT authorizer、explicit CORS origins、`X-Request-Id` correlation header
-- 可用／隔離庫存、退貨／報廢調整與 cursor pagination
+- JWT role guard（purchaser / warehouse / approver / admin）與 actor audit identity
+- 可用／隔離庫存、退貨／報廢調整與帶 filter 的 cursor pagination
 
 ## CURRENT optional deployment / remaining roadmap
 
@@ -177,7 +178,7 @@ Terraform 可選建立 Cognito user pool、私有 S3 + CloudFront、S3 → SQS �
 | `web/index.html` | Dashboard UI、API client |
 | `scripts/build_lambda.sh` | Lambda ZIP package |
 | `infra/main.tf` | AWS resource graph、IAM、environment variables |
-| `tests/` | API、domain、configuration、MCP tests |
+| `tests/` | API、domain、configuration、MCP、repository、import tests |
 
 **結論：**不是 AWS SAM/CDK；是 **FastAPI + Mangum + Terraform** 的 serverless application。
 

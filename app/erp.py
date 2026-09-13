@@ -303,16 +303,38 @@ class ErpStore:
         )
 
     def list_purchase_orders_page(
-        self, limit: int, cursor: str | None = None
+        self,
+        limit: int,
+        cursor: str | None = None,
+        *,
+        status: str | None = None,
+        supplier_name: str | None = None,
     ) -> PurchaseOrderPage:
-        items, next_cursor = self.repository.list_purchase_orders_page(limit, cursor)
+        items, next_cursor = self.repository.list_purchase_orders_page(
+            limit,
+            cursor,
+            status=status,
+            supplier_name=supplier_name,
+        )
         return PurchaseOrderPage(items=items, next_cursor=next_cursor)
 
     def list_inventory(self) -> list[InventoryItem]:
         return sorted(self.repository.list_inventory(), key=lambda item: item.material_id)
 
-    def list_inventory_page(self, limit: int, cursor: str | None = None) -> InventoryPage:
-        items, next_cursor = self.repository.list_inventory_page(limit, cursor)
+    def list_inventory_page(
+        self,
+        limit: int,
+        cursor: str | None = None,
+        *,
+        material_id: str | None = None,
+        low_stock: bool = False,
+    ) -> InventoryPage:
+        items, next_cursor = self.repository.list_inventory_page(
+            limit,
+            cursor,
+            material_id=material_id,
+            low_stock=low_stock,
+        )
         return InventoryPage(items=items, next_cursor=next_cursor)
 
     def list_inventory_transactions(self) -> list[InventoryTransaction]:
@@ -323,9 +345,19 @@ class ErpStore:
         )
 
     def list_inventory_transactions_page(
-        self, limit: int, cursor: str | None = None
+        self,
+        limit: int,
+        cursor: str | None = None,
+        *,
+        material_id: str | None = None,
+        transaction_type: str | None = None,
     ) -> InventoryTransactionPage:
-        items, next_cursor = self.repository.list_inventory_transactions_page(limit, cursor)
+        items, next_cursor = self.repository.list_inventory_transactions_page(
+            limit,
+            cursor,
+            material_id=material_id,
+            transaction_type=transaction_type,
+        )
         return InventoryTransactionPage(items=items, next_cursor=next_cursor)
 
     def adjust_inventory(
