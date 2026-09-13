@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from mangum import Mangum
 
+from app.auth import Actor, get_current_actor, require_roles
 from app.erp import (
     CreatePurchaseOrderRequest,
     DashboardSummary,
@@ -68,17 +70,23 @@ def readiness() -> dict[str, str]:
 
 
 @app.get("/api/dashboard", response_model=DashboardSummary)
-def dashboard() -> DashboardSummary:
+def dashboard(actor: Annotated[Actor, Depends(get_current_actor)]) -> DashboardSummary:
+    del actor
     return store.dashboard()
 
 
 @app.get("/api/purchase-orders", response_model=list[PurchaseOrder])
-def purchase_orders() -> list[PurchaseOrder]:
+def purchase_orders(actor: Annotated[Actor, Depends(get_current_actor)]) -> list[PurchaseOrder]:
+    del actor
     return store.list_purchase_orders()
 
 
 @app.post("/api/purchase-orders", response_model=PurchaseOrder, status_code=201)
-def create_purchase_order(request: CreatePurchaseOrderRequest) -> PurchaseOrder:
+def create_purchase_order(
+    request: CreatePurchaseOrderRequest,
+    actor: Annotated[Actor, Depends(require_roles("purchaser", "admin"))],
+) -> PurchaseOrder:
+    del actor
     try:
         return store.create_purchase_order(request)
     except ValueError as exc:
@@ -88,10 +96,14 @@ def create_purchase_order(request: CreatePurchaseOrderRequest) -> PurchaseOrder:
 @app.post("/api/receipts", response_model=ReceiptResult, status_code=201)
 def receive_purchase_order(
     request: ReceiptRequest,
+    actor: Annotated[Actor, Depends(require_roles("warehouse", "admin"))],
     idempotency_key: str = Header(min_length=8, max_length=128, alias="Idempotency-Key"),
 ) -> ReceiptResult:
     try:
-        return store.receive(request, idempotency_key=idempotency_key)
+        return store.receive(
+            request.model_copy(update={"received_by": actor.subject}),
+            idempotency_key=idempotency_key,
+        )
     except IdempotencyConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PurchaseOrderNotFoundError as exc:
@@ -102,10 +114,15 @@ def receive_purchase_order(
 
 @app.post("/api/purchase-orders/{po_id}/exception-resolution", response_model=PurchaseOrder)
 def resolve_purchase_order_exception(
-    po_id: str, request: ResolveExceptionRequest
+    po_id: str,
+    request: ResolveExceptionRequest,
+    actor: Annotated[Actor, Depends(require_roles("approver", "admin"))],
 ) -> PurchaseOrder:
     try:
-        return store.resolve_exception(po_id, request)
+        return store.resolve_exception(
+            po_id,
+            request.model_copy(update={"resolved_by": actor.subject}),
+        )
     except IdempotencyConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PurchaseOrderNotFoundError as exc:
@@ -115,12 +132,16 @@ def resolve_purchase_order_exception(
 
 
 @app.get("/api/inventory", response_model=list[InventoryItem])
-def inventory() -> list[InventoryItem]:
+def inventory(actor: Annotated[Actor, Depends(get_current_actor)]) -> list[InventoryItem]:
+    del actor
     return store.list_inventory()
 
 
 @app.get("/api/inventory-transactions", response_model=list[InventoryTransaction])
-def inventory_transactions() -> list[InventoryTransaction]:
+def inventory_transactions(
+    actor: Annotated[Actor, Depends(get_current_actor)],
+) -> list[InventoryTransaction]:
+    del actor
     return store.list_inventory_transactions()
 
 
