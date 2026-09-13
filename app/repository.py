@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import time
 from typing import Any, Protocol
@@ -17,6 +18,24 @@ class IdempotencyConflictError(ValueError):
     pass
 
 
+def _encode_cursor(value: dict[str, Any]) -> str:
+    payload = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: str | None) -> dict[str, Any] | None:
+    if not cursor:
+        return None
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        value = json.loads(base64.urlsafe_b64decode(padded).decode())
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("cursor 格式無效") from exc
+    if not isinstance(value, dict):
+        raise ValueError("cursor 格式無效")
+    return value
+
+
 class ReceiptRecord(Protocol):
     receipt_id: str
 
@@ -28,6 +47,11 @@ class ErpRepository(Protocol):
     def list_purchase_orders(self) -> list[Any]:
         ...
 
+    def list_purchase_orders_page(
+        self, limit: int, cursor: str | None
+    ) -> tuple[list[Any], str | None]:
+        ...
+
     def create_purchase_order(self, order: Any) -> Any:
         ...
 
@@ -37,10 +61,20 @@ class ErpRepository(Protocol):
     def list_inventory(self) -> list[Any]:
         ...
 
+    def list_inventory_page(
+        self, limit: int, cursor: str | None
+    ) -> tuple[list[Any], str | None]:
+        ...
+
     def get_inventory(self, material_id: str) -> Any | None:
         ...
 
     def list_inventory_transactions(self) -> list[Any]:
+        ...
+
+    def list_inventory_transactions_page(
+        self, limit: int, cursor: str | None
+    ) -> tuple[list[Any], str | None]:
         ...
 
     def receipt_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
@@ -116,6 +150,11 @@ class InMemoryRepository:
     def list_purchase_orders(self) -> list[Any]:
         return list(self.purchase_orders.values())
 
+    def list_purchase_orders_page(
+        self, limit: int, cursor: str | None
+    ) -> tuple[list[Any], str | None]:
+        return self._page(list(self.purchase_orders.values()), limit, cursor)
+
     def create_purchase_order(self, order: Any) -> Any:
         if order.po_id in self.purchase_orders:
             raise ValueError(f"採購單 {order.po_id} 已存在")
@@ -128,11 +167,35 @@ class InMemoryRepository:
     def list_inventory(self) -> list[Any]:
         return list(self.inventory.values())
 
+    def list_inventory_page(
+        self, limit: int, cursor: str | None
+    ) -> tuple[list[Any], str | None]:
+        return self._page(list(self.inventory.values()), limit, cursor)
+
     def get_inventory(self, material_id: str) -> Any | None:
         return self.inventory.get(material_id)
 
     def list_inventory_transactions(self) -> list[Any]:
         return list(self.inventory_transactions.values())
+
+    def list_inventory_transactions_page(
+        self, limit: int, cursor: str | None
+    ) -> tuple[list[Any], str | None]:
+        return self._page(list(self.inventory_transactions.values()), limit, cursor)
+
+    @staticmethod
+    def _page(items: list[Any], limit: int, cursor: str | None) -> tuple[list[Any], str | None]:
+        decoded = _decode_cursor(cursor)
+        offset = int(decoded.get("offset", 0)) if decoded else 0
+        if offset < 0:
+            raise ValueError("cursor 格式無效")
+        page = items[offset : offset + limit]
+        next_cursor = (
+            _encode_cursor({"offset": offset + limit})
+            if offset + limit < len(items)
+            else None
+        )
+        return page, next_cursor
 
     def receipt_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
         expiry = self.idempotency_expiry.get(idempotency_key)
@@ -207,6 +270,7 @@ class InMemoryRepository:
             return
         self.alert_batch_status[batch_id] = "pending"
         self.alert_batch_leases[batch_id] = 0
+        self.alert_batch_tokens.pop(batch_id, None)
 
     def mark_alert_batch_published(self, batch_id: str, lease_token: str) -> None:
         if self.alert_batch_tokens.get(batch_id) != lease_token:
@@ -289,6 +353,25 @@ class DynamoDbRepository:
             items.extend(response.get("Items", []))
         return items
 
+    def _query_page(
+        self, entity: str, limit: int, cursor: str | None
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        kwargs: dict[str, Any] = {"Limit": limit}
+        decoded = _decode_cursor(cursor)
+        if decoded:
+            exclusive_start_key = decoded.get("last_evaluated_key")
+            if not isinstance(exclusive_start_key, dict):
+                raise ValueError("cursor 格式無效")
+            kwargs["ExclusiveStartKey"] = exclusive_start_key
+        response = self._table.query(
+            IndexName="EntityIndex",
+            KeyConditionExpression=Key("entity").eq(entity),
+            **kwargs,
+        )
+        last_key = response.get("LastEvaluatedKey")
+        next_cursor = _encode_cursor({"last_evaluated_key": last_key}) if last_key else None
+        return response.get("Items", []), next_cursor
+
     def _query_count(self, entity: str, **kwargs: Any) -> int:
         total = 0
         response = self._table.query(
@@ -318,6 +401,12 @@ class DynamoDbRepository:
         items = self._query_items("purchase_order")
         return [self._model(item, "PurchaseOrder") for item in items]
 
+    def list_purchase_orders_page(
+        self, limit: int, cursor: str | None
+    ) -> tuple[list[Any], str | None]:
+        items, next_cursor = self._query_page("purchase_order", limit, cursor)
+        return [self._model(item, "PurchaseOrder") for item in items], next_cursor
+
     def create_purchase_order(self, order: Any) -> Any:
         try:
             self._table.put_item(
@@ -344,6 +433,12 @@ class DynamoDbRepository:
         items = self._query_items("inventory")
         return [self._model(item, "InventoryItem") for item in items]
 
+    def list_inventory_page(
+        self, limit: int, cursor: str | None
+    ) -> tuple[list[Any], str | None]:
+        items, next_cursor = self._query_page("inventory", limit, cursor)
+        return [self._model(item, "InventoryItem") for item in items], next_cursor
+
     def get_inventory(self, material_id: str) -> Any | None:
         response = self._table.get_item(Key={"PK": f"inventory#{material_id}", "SK": "META"})
         item = response.get("Item")
@@ -352,6 +447,12 @@ class DynamoDbRepository:
     def list_inventory_transactions(self) -> list[Any]:
         items = self._query_items("inventory_transaction")
         return [self._model(item, "InventoryTransaction") for item in items]
+
+    def list_inventory_transactions_page(
+        self, limit: int, cursor: str | None
+    ) -> tuple[list[Any], str | None]:
+        items, next_cursor = self._query_page("inventory_transaction", limit, cursor)
+        return [self._model(item, "InventoryTransaction") for item in items], next_cursor
 
     def receipt_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
         response = self._table.get_item(Key={"PK": f"idempotency#{idempotency_key}", "SK": "META"})

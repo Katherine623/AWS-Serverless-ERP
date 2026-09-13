@@ -70,11 +70,14 @@ uvicorn app.main:app --reload
 | GET | `/health` / `/ready` | Liveness / DynamoDB readiness |
 | GET | `/api/dashboard` | ERP KPI 摘要 |
 | GET | `/api/purchase-orders` | 查詢採購單 |
+| GET | `/api/v2/purchase-orders?limit=50&cursor=...` | 分頁查詢採購單 |
 | POST | `/api/purchase-orders` | 建立採購單 |
 | POST | `/api/receipts` | 送出驗收並更新庫存 |
 | POST | `/api/purchase-orders/{po_id}/exception-resolution` | 補貨或差異允收結案 |
 | GET | `/api/inventory` | 查詢庫存 |
+| GET | `/api/v2/inventory?limit=50&cursor=...` | 分頁查詢庫存 |
 | GET | `/api/inventory-transactions` | 查詢庫存異動 |
+| GET | `/api/v2/inventory-transactions?limit=50&cursor=...` | 分頁查詢庫存異動 |
 
 收料 API 需要 `Idempotency-Key` header；超收會建立異常，必須使用「差異允收結案」才能關閉。
 

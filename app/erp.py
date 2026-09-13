@@ -144,6 +144,21 @@ class DashboardSummary(BaseModel):
     inventory_item_count: int
 
 
+class PurchaseOrderPage(BaseModel):
+    items: list[PurchaseOrder]
+    next_cursor: str | None = None
+
+
+class InventoryPage(BaseModel):
+    items: list[InventoryItem]
+    next_cursor: str | None = None
+
+
+class InventoryTransactionPage(BaseModel):
+    items: list[InventoryTransaction]
+    next_cursor: str | None = None
+
+
 class PurchaseOrderStatus(StrEnum):
     PENDING = "待驗收"
     EXCEPTION = "待處理異常"
@@ -241,8 +256,18 @@ class ErpStore:
             key=lambda order: (order.expected_date, order.po_id),
         )
 
+    def list_purchase_orders_page(
+        self, limit: int, cursor: str | None = None
+    ) -> PurchaseOrderPage:
+        items, next_cursor = self.repository.list_purchase_orders_page(limit, cursor)
+        return PurchaseOrderPage(items=items, next_cursor=next_cursor)
+
     def list_inventory(self) -> list[InventoryItem]:
         return sorted(self.repository.list_inventory(), key=lambda item: item.material_id)
+
+    def list_inventory_page(self, limit: int, cursor: str | None = None) -> InventoryPage:
+        items, next_cursor = self.repository.list_inventory_page(limit, cursor)
+        return InventoryPage(items=items, next_cursor=next_cursor)
 
     def list_inventory_transactions(self) -> list[InventoryTransaction]:
         return sorted(
@@ -250,6 +275,12 @@ class ErpStore:
             key=lambda transaction: transaction.occurred_at,
             reverse=True,
         )
+
+    def list_inventory_transactions_page(
+        self, limit: int, cursor: str | None = None
+    ) -> InventoryTransactionPage:
+        items, next_cursor = self.repository.list_inventory_transactions_page(limit, cursor)
+        return InventoryTransactionPage(items=items, next_cursor=next_cursor)
 
     def create_purchase_order(self, request: CreatePurchaseOrderRequest) -> PurchaseOrder:
         with self._lock:

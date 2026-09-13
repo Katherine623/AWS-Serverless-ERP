@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from mangum import Mangum
 
@@ -15,9 +15,12 @@ from app.erp import (
     CreatePurchaseOrderRequest,
     DashboardSummary,
     InventoryItem,
+    InventoryPage,
     InventoryTransaction,
+    InventoryTransactionPage,
     PurchaseOrder,
     PurchaseOrderNotFoundError,
+    PurchaseOrderPage,
     ReceiptRequest,
     ReceiptResult,
     ResolveExceptionRequest,
@@ -81,6 +84,19 @@ def purchase_orders(actor: Annotated[Actor, Depends(get_current_actor)]) -> list
     return store.list_purchase_orders()
 
 
+@app.get("/api/v2/purchase-orders", response_model=PurchaseOrderPage)
+def purchase_orders_page(
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None, max_length=1024),
+) -> PurchaseOrderPage:
+    del actor
+    try:
+        return store.list_purchase_orders_page(limit, cursor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/purchase-orders", response_model=PurchaseOrder, status_code=201)
 def create_purchase_order(
     request: CreatePurchaseOrderRequest,
@@ -137,12 +153,38 @@ def inventory(actor: Annotated[Actor, Depends(get_current_actor)]) -> list[Inven
     return store.list_inventory()
 
 
+@app.get("/api/v2/inventory", response_model=InventoryPage)
+def inventory_page(
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None, max_length=1024),
+) -> InventoryPage:
+    del actor
+    try:
+        return store.list_inventory_page(limit, cursor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/inventory-transactions", response_model=list[InventoryTransaction])
 def inventory_transactions(
     actor: Annotated[Actor, Depends(get_current_actor)],
 ) -> list[InventoryTransaction]:
     del actor
     return store.list_inventory_transactions()
+
+
+@app.get("/api/v2/inventory-transactions", response_model=InventoryTransactionPage)
+def inventory_transactions_page(
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None, max_length=1024),
+) -> InventoryTransactionPage:
+    del actor
+    try:
+        return store.list_inventory_transactions_page(limit, cursor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 handler = Mangum(app, lifespan="off")
