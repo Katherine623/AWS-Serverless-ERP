@@ -234,10 +234,13 @@ class ErpStore:
             )
 
     def list_purchase_orders(self) -> list[PurchaseOrder]:
-        return self.repository.list_purchase_orders()
+        return sorted(
+            self.repository.list_purchase_orders(),
+            key=lambda order: (order.expected_date, order.po_id),
+        )
 
     def list_inventory(self) -> list[InventoryItem]:
-        return self.repository.list_inventory()
+        return sorted(self.repository.list_inventory(), key=lambda item: item.material_id)
 
     def list_inventory_transactions(self) -> list[InventoryTransaction]:
         return sorted(
