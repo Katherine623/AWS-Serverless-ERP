@@ -79,7 +79,8 @@ def resolve_purchase_order_exception(
     except IdempotencyConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        status_code = 404 if "找不到採購單" in str(exc) else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @app.get("/api/inventory", response_model=list[InventoryItem])
