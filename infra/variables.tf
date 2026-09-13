@@ -44,6 +44,12 @@ variable "enable_pitr" {
   default     = true
 }
 
+variable "enable_deletion_protection" {
+  description = "Prevent accidental DynamoDB table deletion."
+  type        = bool
+  default     = true
+}
+
 variable "api_auth_enabled" {
   description = "Require a JWT authorizer on the HTTP API."
   type        = bool

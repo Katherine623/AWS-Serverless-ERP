@@ -39,10 +39,11 @@ resource "terraform_data" "auth_config" {
 }
 
 resource "aws_dynamodb_table" "erp" {
-  name         = "${var.project_name}-data"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "PK"
-  range_key    = "SK"
+  name                        = "${var.project_name}-data"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "PK"
+  range_key                   = "SK"
+  deletion_protection_enabled = var.enable_deletion_protection
 
   attribute {
     name = "PK"
@@ -73,6 +74,10 @@ resource "aws_dynamodb_table" "erp" {
 
   point_in_time_recovery {
     enabled = var.enable_pitr
+  }
+
+  server_side_encryption {
+    enabled = true
   }
 
   tags = var.tags
