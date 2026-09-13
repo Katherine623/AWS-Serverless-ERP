@@ -3,11 +3,12 @@ import pytest
 from app.erp import (
     CreatePurchaseOrderRequest,
     ErpStore,
+    InventoryAdjustmentRequest,
     PurchaseOrderNotFoundError,
     ReceiptRequest,
     ResolveExceptionRequest,
 )
-from app.repository import InMemoryRepository
+from app.repository import IdempotencyConflictError, InMemoryRepository
 
 
 class FailingAlertPublisher:
@@ -146,4 +147,28 @@ def test_unknown_purchase_order_uses_typed_not_found_error() -> None:
                 }
             ),
             idempotency_key="unknown-po-001",
+        )
+
+
+def test_inventory_adjustment_is_atomic_and_idempotent() -> None:
+    store = make_store()
+    request = InventoryAdjustmentRequest(
+        material_id="MAT-1001",
+        quantity_change=-20,
+        adjustment_type="退貨",
+        reason="供應商退貨",
+    )
+
+    first = store.adjust_inventory(request, "adjustment-001")
+    replay = store.adjust_inventory(request, "adjustment-001")
+
+    assert first.quantity_before == 420
+    assert first.quantity_after == 400
+    assert replay.adjustment_id == first.adjustment_id
+    assert store.list_inventory_transactions()[0].transaction_type == "退貨"
+
+    with pytest.raises(IdempotencyConflictError):
+        store.adjust_inventory(
+            request.model_copy(update={"quantity_change": -30}),
+            "adjustment-001",
         )

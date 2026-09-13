@@ -14,7 +14,10 @@ from app.auth import Actor, get_current_actor, require_roles
 from app.erp import (
     CreatePurchaseOrderRequest,
     DashboardSummary,
+    InventoryAdjustmentRequest,
+    InventoryAdjustmentResult,
     InventoryItem,
+    InventoryNotFoundError,
     InventoryPage,
     InventoryTransaction,
     InventoryTransactionPage,
@@ -137,6 +140,25 @@ def receive_purchase_order(
     except IdempotencyConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PurchaseOrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/inventory-adjustments", response_model=InventoryAdjustmentResult, status_code=201)
+def adjust_inventory(
+    request: InventoryAdjustmentRequest,
+    actor: Annotated[Actor, Depends(require_roles("approver", "admin"))],
+    idempotency_key: str = Header(min_length=8, max_length=128, alias="Idempotency-Key"),
+) -> InventoryAdjustmentResult:
+    try:
+        return store.adjust_inventory(
+            request.model_copy(update={"performed_by": actor.subject}),
+            idempotency_key,
+        )
+    except IdempotencyConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InventoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

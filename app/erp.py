@@ -25,6 +25,10 @@ class PurchaseOrderNotFoundError(ValueError):
     """Raised when an ERP operation references an unknown purchase order."""
 
 
+class InventoryNotFoundError(ValueError):
+    """Raised when an inventory operation references an unknown material."""
+
+
 class PurchaseOrderItem(BaseModel):
     material_id: str = Field(min_length=1, max_length=80)
     material_name: str = Field(min_length=1, max_length=160)
@@ -104,6 +108,36 @@ class ReceiptResult(BaseModel):
     exceptions: list[str]
     received_by: str
     received_at: datetime
+
+
+class InventoryAdjustmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    material_id: str = Field(min_length=1, max_length=80)
+    quantity_change: int = Field(ge=-1_000_000_000, le=1_000_000_000)
+    adjustment_type: str = Field(pattern="^(盤點調整|退貨|報廢)$")
+    reason: str = Field(min_length=1, max_length=500)
+    performed_by: str = Field(default="warehouse-user", min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_negative_operation(self) -> InventoryAdjustmentRequest:
+        if self.quantity_change == 0:
+            raise ValueError("庫存異動不可為 0")
+        if self.adjustment_type in {"退貨", "報廢"} and self.quantity_change > 0:
+            raise ValueError("退貨或報廢的庫存異動必須小於 0")
+        return self
+
+
+class InventoryAdjustmentResult(BaseModel):
+    adjustment_id: str
+    material_id: str
+    adjustment_type: str
+    quantity_change: int
+    quantity_before: int
+    quantity_after: int
+    reason: str
+    performed_by: str
+    occurred_at: datetime
 
 
 class ResolveExceptionRequest(BaseModel):
@@ -281,6 +315,62 @@ class ErpStore:
     ) -> InventoryTransactionPage:
         items, next_cursor = self.repository.list_inventory_transactions_page(limit, cursor)
         return InventoryTransactionPage(items=items, next_cursor=next_cursor)
+
+    def adjust_inventory(
+        self,
+        request: InventoryAdjustmentRequest,
+        idempotency_key: str,
+    ) -> InventoryAdjustmentResult:
+        request_hash = hashlib.sha256(
+            json.dumps(request.model_dump(mode="json"), sort_keys=True).encode()
+        ).hexdigest()
+        existing = self.repository.mutation_for_key(idempotency_key)
+        if existing:
+            if existing[1] != request_hash:
+                raise IdempotencyConflictError("Idempotency-Key 已用於不同的庫存異動")
+            return existing[0]
+        with self._lock:
+            previous_inventory = self.repository.get_inventory(request.material_id)
+            if not previous_inventory:
+                raise InventoryNotFoundError(f"找不到料號 {request.material_id}")
+            quantity_after = previous_inventory.quantity + request.quantity_change
+            if quantity_after < 0:
+                raise ValueError("庫存不可低於 0")
+            inventory = previous_inventory.model_copy(deep=True)
+            inventory.quantity = quantity_after
+            inventory.updated_at = datetime.now(UTC)
+            occurred_at = inventory.updated_at
+            adjustment_id = f"ADJ-{uuid4().hex[:10].upper()}"
+            transaction = InventoryTransaction(
+                transaction_id=f"INV-{uuid4().hex[:12].upper()}",
+                material_id=inventory.material_id,
+                material_name=inventory.material_name,
+                quantity_change=request.quantity_change,
+                transaction_type=request.adjustment_type,
+                reference_id=adjustment_id,
+                performed_by=request.performed_by,
+                occurred_at=occurred_at,
+            )
+            result = InventoryAdjustmentResult(
+                adjustment_id=adjustment_id,
+                material_id=inventory.material_id,
+                adjustment_type=request.adjustment_type,
+                quantity_change=request.quantity_change,
+                quantity_before=previous_inventory.quantity,
+                quantity_after=quantity_after,
+                reason=request.reason,
+                performed_by=request.performed_by,
+                occurred_at=occurred_at,
+            )
+            self.repository.save_inventory_adjustment(
+                result,
+                idempotency_key,
+                request_hash,
+                inventory,
+                previous_inventory,
+                transaction,
+            )
+            return result
 
     def create_purchase_order(self, request: CreatePurchaseOrderRequest) -> PurchaseOrder:
         with self._lock:

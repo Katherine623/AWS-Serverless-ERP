@@ -81,6 +81,9 @@ class ErpRepository(Protocol):
     def receipt_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
         ...
 
+    def mutation_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
+        ...
+
     def save_receipt(
         self,
         result: Any,
@@ -91,6 +94,17 @@ class ErpRepository(Protocol):
         inventory: list[tuple[Any, Any | None]],
         inventory_transactions: list[Any],
         alerts: list[AlertEvent],
+    ) -> None:
+        ...
+
+    def save_inventory_adjustment(
+        self,
+        result: Any,
+        idempotency_key: str,
+        request_hash: str,
+        inventory: Any,
+        previous_inventory: Any,
+        transaction: Any,
     ) -> None:
         ...
 
@@ -144,6 +158,7 @@ class InMemoryRepository:
         self.alert_batch_tokens: dict[str, str] = {}
         self.alert_batch_attempts: dict[str, int] = {}
         self.idempotency_expiry: dict[str, float] = {}
+        self.mutation_idempotency: dict[str, tuple[Any, str]] = {}
 
     def get_purchase_order(self, po_id: str) -> Any | None:
         return self.purchase_orders.get(po_id)
@@ -206,6 +221,9 @@ class InMemoryRepository:
             return None
         return self.idempotency.get(idempotency_key)
 
+    def mutation_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
+        return self.mutation_idempotency.get(idempotency_key)
+
     def save_receipt(
         self,
         result: Any,
@@ -239,6 +257,26 @@ class InMemoryRepository:
             self.idempotency_expiry[idempotency_key] = (
                 time.time() + get_settings().idempotency_ttl_days * 86400
             )
+
+    def save_inventory_adjustment(
+        self,
+        result: Any,
+        idempotency_key: str,
+        request_hash: str,
+        inventory: Any,
+        previous_inventory: Any,
+        transaction: Any,
+    ) -> None:
+        existing = self.mutation_for_key(idempotency_key)
+        if existing:
+            if existing[1] != request_hash:
+                raise IdempotencyConflictError("Idempotency-Key 已用於不同的庫存異動")
+            return
+        if self.inventory.get(inventory.material_id) != previous_inventory:
+            raise IdempotencyConflictError("庫存已由另一筆操作更新，請重新整理後再試")
+        self.inventory[inventory.material_id] = inventory
+        self.inventory_transactions[transaction.transaction_id] = transaction
+        self.mutation_idempotency[idempotency_key] = (result, request_hash)
 
     def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
         now = time.time()
@@ -470,6 +508,18 @@ class DynamoDbRepository:
             return None
         return self._model(receipt, "ReceiptResult"), item["request_hash"]
 
+    def mutation_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
+        item = self._table.get_item(
+            Key={"PK": f"mutation#{idempotency_key}", "SK": "META"}
+        ).get("Item")
+        if not item:
+            return None
+        expires_at = item.get("expires_at")
+        if expires_at is not None and int(expires_at) <= int(time.time()):
+            self._table.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
+            return None
+        return self._model(item, "InventoryAdjustmentResult"), item["request_hash"]
+
     def save_receipt(
         self,
         result: Any,
@@ -590,6 +640,78 @@ class DynamoDbRepository:
                     return
                 raise IdempotencyConflictError(
                     "採購單或庫存已由另一筆收料更新，請重新整理後再試"
+                ) from exc
+            raise
+
+    def save_inventory_adjustment(
+        self,
+        result: Any,
+        idempotency_key: str,
+        request_hash: str,
+        inventory: Any,
+        previous_inventory: Any,
+        transaction: Any,
+    ) -> None:
+        actions = [
+            {
+                "Put": {
+                    "TableName": self._table.name,
+                    "Item": self._item("inventory_adjustment", result.adjustment_id, result),
+                    "ConditionExpression": "attribute_not_exists(PK)",
+                }
+            },
+            {
+                "Put": {
+                    "TableName": self._table.name,
+                    "Item": self._item("inventory", inventory.material_id, inventory),
+                    "ConditionExpression": "#data = :previous",
+                    "ExpressionAttributeNames": {"#data": "data"},
+                    "ExpressionAttributeValues": {
+                        ":previous": json.dumps(
+                            previous_inventory.model_dump(mode="json"), ensure_ascii=False
+                        )
+                    },
+                }
+            },
+            {
+                "Put": {
+                    "TableName": self._table.name,
+                    "Item": self._item(
+                        "inventory_transaction", transaction.transaction_id, transaction
+                    ),
+                    "ConditionExpression": "attribute_not_exists(PK)",
+                }
+            },
+            {
+                "Put": {
+                    "TableName": self._table.name,
+                    "Item": {
+                        "PK": f"mutation#{idempotency_key}",
+                        "SK": "META",
+                        "entity": "mutation",
+                        "entity_key": idempotency_key,
+                        "request_hash": request_hash,
+                        "expires_at": int(time.time())
+                        + get_settings().idempotency_ttl_days * 86400,
+                        "data": json.dumps(result.model_dump(mode="json"), ensure_ascii=False),
+                    },
+                    "ConditionExpression": "attribute_not_exists(PK)",
+                }
+            },
+        ]
+        try:
+            self._table.meta.client.transact_write_items(TransactItems=actions)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "TransactionCanceledException":
+                existing = self.mutation_for_key(idempotency_key)
+                if existing:
+                    if existing[1] != request_hash:
+                        raise IdempotencyConflictError(
+                            "Idempotency-Key 已用於不同的庫存異動"
+                        ) from exc
+                    return
+                raise IdempotencyConflictError(
+                    "庫存已由另一筆操作更新，請重新整理後再試"
                 ) from exc
             raise
 
