@@ -233,7 +233,7 @@ function bulletList(slide, items, x, y, w, color = c.teal) {
   bulletList(slide, ["Lambda ZIP，不使用 ECR", "DynamoDB PAY_PER_REQUEST", "Lambda 512 MB / 30 sec", "CloudWatch retention 可設定", "Demo 結束後可 Terraform destroy"], 5.08, 2.68, 3.0, c.teal);
   box(slide, 8.88, 1.67, 3.75, 4.65, { fill: { color: "FFF9F0" }, line: { color: "E7C598", width: 0.8 } });
   text(slide, "下一步風險處理", { x: 9.18, y: 2.04, w: 2.2, h: 0.24, fontSize: 16, bold: true, color: c.red });
-  bulletList(slide, ["Cognito JWT + RBAC", "CloudFront + private S3 frontend", "SQS Excel 匯入與 retry", "QC、退貨與三方匹配"], 9.18, 2.68, 3.0, c.red);
+  bulletList(slide, ["正式 Cognito 使用者佈建", "custom domain / WAF / 通知訂閱", "structured logs 與 SBOM", "QC 與 PO / GRN / Invoice 三方匹配"], 9.18, 2.68, 3.0, c.red);
   footer(slide);
 }
 
