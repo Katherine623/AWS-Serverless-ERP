@@ -66,6 +66,7 @@ uvicorn app.main:app --reload
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| GET | `/health` / `/ready` | Liveness / DynamoDB readiness |
 | GET | `/api/dashboard` | ERP KPI 摘要 |
 | GET | `/api/purchase-orders` | 查詢採購單 |
 | POST | `/api/purchase-orders` | 建立採購單 |

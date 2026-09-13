@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from uuid import uuid4
@@ -30,6 +31,7 @@ app = FastAPI(
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+logger = logging.getLogger(__name__)
 
 
 @app.middleware("http")
@@ -53,6 +55,16 @@ def index() -> FileResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "erp-receiving-platform"}
+
+
+@app.get("/ready")
+def readiness() -> dict[str, str]:
+    try:
+        store.repository.list_inventory()
+    except Exception as exc:
+        logger.exception("ERP repository readiness check failed")
+        raise HTTPException(status_code=503, detail="ERP repository unavailable") from exc
+    return {"status": "ready", "service": "erp-receiving-platform"}
 
 
 @app.get("/api/dashboard", response_model=DashboardSummary)
