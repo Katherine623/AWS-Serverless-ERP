@@ -5,7 +5,7 @@ AWS Serverless ERP 物料點收管理平台，將採購單、到貨驗收、異�
 ## 核心流程
 
 ```text
-採購單 -> 到貨驗收 -> 短缺／超收判斷 -> 庫存更新 -> Dashboard 查詢
+採購單 -> 到貨驗收 -> 短缺／超收判斷 -> 庫存更新 -> AWS SNS 警示 -> Dashboard 查詢
 ```
 
 目前 Demo 支援：
@@ -15,7 +15,20 @@ AWS Serverless ERP 物料點收管理平台，將採購單、到貨驗收、異�
 - 實際收料數量與採購數量比對
 - 短缺與超收異常訊息
 - 庫存與安全庫存判斷
+- 收料異常與低庫存警示
 - ERP Dashboard 與 API 文件
+- DynamoDB 持久化與收料 idempotency（設定 `ERP_DYNAMODB_TABLE_NAME` 後啟用）
+
+## AWS 警示系統
+
+每次送出 `POST /api/receipts` 後，系統會檢查：
+
+- 實收數量與採購數量不同：發布 `收料異常`
+- 收料後庫存低於 `reorder_point`：發布 `低庫存`
+
+送出收料時建議帶上唯一的 `Idempotency-Key` header。相同 key 與相同內容會回傳原本的收料結果，不會重複增加庫存；相同 key 若搭配不同內容，API 會回傳 `409`。
+
+本機未設定 `ERP_ALERT_TOPIC_ARN` 時，警示會寫入 application log；部署到 AWS 後，Terraform 會建立 SNS topic，Lambda 透過 `ERP_ALERT_TOPIC_ARN` 發布 JSON 警示。Email 訂閱不由 Terraform 管理，避免人工確認狀態與 Terraform state 不一致。
 
 ## AWS 架構目標
 
@@ -62,7 +75,19 @@ uvicorn app.main:app --reload
 docker build --platform linux/amd64 -t erp-receiving-platform .
 ```
 
-Lambda Container、API Gateway 與 IAM 的 Terraform 設定位於 `infra/`。部署前請先將映像推送至 ECR，再以 `terraform -chdir=infra apply -var="image_uri=..."` 建立資源。
+Lambda ZIP、API Gateway、IAM、DynamoDB 與 SNS 警示的 Terraform 設定位於 `infra/`。部署前先建立 Lambda ZIP：
+
+```bash
+bash scripts/build_lambda.sh
+```
+
+再執行：
+
+```bash
+terraform -chdir=infra apply
+```
+
+此部署方式不需要 Docker 或 ECR；SNS Topic 會保留，警示可透過 CloudWatch Logs 查看。若日後要啟用通知，請使用受控的 HTTPS endpoint 或另外建立獨立通知流程，不要反覆替換 SNS Email subscription。
 
 ## 履歷描述
 

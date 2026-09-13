@@ -2,18 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from mangum import Mangum
 
 from app.erp import (
+    CreatePurchaseOrderRequest,
     DashboardSummary,
     InventoryItem,
+    InventoryTransaction,
     PurchaseOrder,
     ReceiptRequest,
     ReceiptResult,
+    ResolveExceptionRequest,
     store,
 )
+from app.repository import IdempotencyConflictError
 
 app = FastAPI(
     title="AWS Serverless ERP Receiving Platform",
@@ -45,17 +49,35 @@ def purchase_orders() -> list[PurchaseOrder]:
 
 
 @app.post("/api/purchase-orders", response_model=PurchaseOrder, status_code=201)
-def create_purchase_order(order: PurchaseOrder) -> PurchaseOrder:
+def create_purchase_order(request: CreatePurchaseOrderRequest) -> PurchaseOrder:
     try:
-        return store.create_purchase_order(order)
+        return store.create_purchase_order(request)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/receipts", response_model=ReceiptResult, status_code=201)
-def receive_purchase_order(request: ReceiptRequest) -> ReceiptResult:
+def receive_purchase_order(
+    request: ReceiptRequest,
+    idempotency_key: str = Header(min_length=8, alias="Idempotency-Key"),
+) -> ReceiptResult:
     try:
-        return store.receive(request)
+        return store.receive(request, idempotency_key=idempotency_key)
+    except IdempotencyConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        status_code = 404 if "找不到採購單" in str(exc) else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@app.post("/api/purchase-orders/{po_id}/exception-resolution", response_model=PurchaseOrder)
+def resolve_purchase_order_exception(
+    po_id: str, request: ResolveExceptionRequest
+) -> PurchaseOrder:
+    try:
+        return store.resolve_exception(po_id, request)
+    except IdempotencyConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -63,6 +85,11 @@ def receive_purchase_order(request: ReceiptRequest) -> ReceiptResult:
 @app.get("/api/inventory", response_model=list[InventoryItem])
 def inventory() -> list[InventoryItem]:
     return store.list_inventory()
+
+
+@app.get("/api/inventory-transactions", response_model=list[InventoryTransaction])
+def inventory_transactions() -> list[InventoryTransaction]:
+    return store.list_inventory_transactions()
 
 
 handler = Mangum(app, lifespan="off")

@@ -8,3 +8,13 @@ output "lambda_role_arn" {
   value       = aws_iam_role.lambda.arn
 }
 
+output "alert_topic_arn" {
+  description = "SNS topic ARN for ERP alerts."
+  value       = aws_sns_topic.erp_alerts.arn
+}
+
+output "data_table_name" {
+  description = "DynamoDB table used by the ERP API."
+  value       = aws_dynamodb_table.erp.name
+}
+

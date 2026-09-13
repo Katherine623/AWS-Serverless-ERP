@@ -1,214 +1,79 @@
 <!doctype html>
 <html lang="zh-Hant">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ERP 物料點收管理平台</title>
-    <style>
-      :root {
-        --ink:#19343b;
-        --muted:#6b8588;
-        --paper:#f4f6ef;
-        --panel:#fffdf7;
-        --teal:#0f7771;
-        --orange:#dc7a39;
-        --line:#dbe5df;
-        --danger:#c9554b;
-      }
-
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-        background:
-          radial-gradient(circle at 10% -10%, rgba(70, 214, 180, 0.15), transparent 35rem),
-          radial-gradient(circle at 100% 0%, rgba(78, 121, 255, 0.14), transparent 34rem),
-          var(--bg);
-        color: var(--ink);
-      }
-
-      main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 52px 0 80px; }
-      header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-end; }
-      .eyebrow { color: var(--accent); font-weight: 700; letter-spacing: .12em; font-size: 12px; }
-      h1 { margin: 9px 0 8px; font-size: clamp(28px, 5vw, 50px); letter-spacing: -.04em; }
-      .subtitle { margin: 0; color: var(--muted); max-width: 650px; line-height: 1.65; }
-      .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-      select, button {
-        border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px;
-        font: inherit; color: var(--text); background: var(--panel-soft);
-      }
-      button { background: var(--accent); color: #03251e; border: 0; font-weight: 800; cursor: pointer; }
-      button:disabled { opacity: .6; cursor: wait; }
-      .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 36px 0 14px; }
-      .card, .finding, .analysis, .empty {
-        background: linear-gradient(145deg, rgba(19,36,59,.96), rgba(14,27,45,.96));
-        border: 1px solid var(--border); border-radius: 16px;
-      }
-      .card { padding: 19px; }
-      .label { color: var(--muted); font-size: 13px; }
-      .metric { display: block; margin-top: 8px; font-size: 28px; font-weight: 800; }
-      .analysis { padding: 20px 22px; margin-bottom: 24px; line-height: 1.65; }
-      .analysis strong { color: var(--accent); }
-      .toolbar { display: flex; justify-content: space-between; align-items: center; margin: 28px 0 12px; }
-      .toolbar h2 { margin: 0; font-size: 20px; }
-      #findings { display: grid; gap: 12px; }
-      .finding { padding: 19px 20px; display: grid; grid-template-columns: 104px 1fr auto; gap: 18px; align-items: start; }
-      .badge { display: inline-flex; justify-content: center; padding: 5px 8px; border-radius: 999px; font-size: 11px; font-weight: 900; text-transform: uppercase; }
-      .critical { color: var(--critical); background: rgba(255,93,115,.12); }
-      .high { color: var(--high); background: rgba(255,142,83,.12); }
-      .medium { color: var(--medium); background: rgba(243,201,105,.12); }
-      .low { color: var(--low); background: rgba(117,185,255,.12); }
-      .finding h3 { margin: 0 0 7px; font-size: 16px; }
-      .finding p { margin: 0; color: var(--muted); line-height: 1.55; }
-      .resource { margin-top: 9px; font-family: ui-monospace, monospace; font-size: 12px; color: #b7c9dd; overflow-wrap: anywhere; }
-      .saving { color: var(--accent); white-space: nowrap; font-weight: 800; }
-      .plan-btn { margin-top: 12px; padding: 8px 11px; font-size: 12px; background: transparent; color: var(--accent); border: 1px solid rgba(70,214,180,.35); }
-      dialog { width: min(640px, calc(100% - 32px)); color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 24px; }
-      dialog::backdrop { background: rgba(0,0,0,.72); }
-      dialog h2 { margin-top: 0; }
-      pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; background: #07111f; border-radius: 10px; color: #c8d8e9; }
-      .dialog-actions { display: flex; justify-content: flex-end; }
-      .empty { padding: 30px; text-align: center; color: var(--muted); }
-      .error { color: var(--critical); }
-      @media (max-width: 760px) {
-        header { align-items: flex-start; flex-direction: column; }
-        .summary-grid { grid-template-columns: repeat(2, 1fr); }
-        .finding { grid-template-columns: 85px 1fr; }
-        .saving { grid-column: 2; }
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <header>
-        <div>
-          <div class="eyebrow">AWS GOVERNANCE / AI AGENT</div>
-          <h1>FinOpsSec Governance Agent</h1>
-          <p class="subtitle">掃描 AWS 成本與資安風險，產生附證據、需要人工核准的修復計畫。</p>
-        </div>
-        <div class="controls">
-          <select id="mode" aria-label="掃描模式">
-            <option value="demo">Demo 資料</option>
-            <option value="aws">真實 AWS 帳號</option>
-          </select>
-          <select id="region" aria-label="AWS 區域">
-            <option value="ap-northeast-1">Tokyo</option>
-            <option value="ap-northeast-3">Osaka</option>
-            <option value="ap-southeast-1">Singapore</option>
-            <option value="us-east-1">N. Virginia</option>
-          </select>
-          <button id="scan">開始掃描</button>
-        </div>
-      </header>
-
-      <section class="summary-grid" aria-label="掃描摘要">
-        <div class="card"><span class="label">治理分數</span><span class="metric" id="score">—</span></div>
-        <div class="card"><span class="label">發現問題</span><span class="metric" id="total">—</span></div>
-        <div class="card"><span class="label">Critical / High</span><span class="metric" id="urgent">—</span></div>
-        <div class="card"><span class="label">預估每月節省</span><span class="metric" id="savings">—</span></div>
-      </section>
-
-      <section class="analysis"><strong>Agent 摘要：</strong> <span id="analysis">尚未執行掃描。</span></section>
-      <section id="errors"></section>
-      <div class="toolbar"><h2>治理發現</h2><span class="label" id="scanMeta"></span></div>
-      <section id="findings"><div class="empty">按下「開始掃描」查看結果。</div></section>
-    </main>
-
-    <dialog id="planDialog">
-      <h2>修復計畫</h2>
-      <p id="planSummary"></p>
-      <pre id="planBody"></pre>
-      <p class="label">此版本只產生計畫，不會修改 AWS。後續版本將加入人工核准與執行紀錄。</p>
-      <div class="dialog-actions"><button id="closeDialog">關閉</button></div>
-    </dialog>
-
-    <script>
-      const state = { findings: [] };
-      const el = id => document.getElementById(id);
-
-      function escapeHtml(value) {
-        return String(value).replace(/[&<>'"]/g, char => ({
-          '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
-        })[char]);
-      }
-
-      function render(report) {
-        const summary = report.summary;
-        state.findings = report.findings;
-        el('score').textContent = `${summary.governance_score}/100`;
-        el('total').textContent = summary.total_findings;
-        el('urgent').textContent = `${summary.by_severity.critical} / ${summary.by_severity.high}`;
-        el('savings').textContent = `US$${summary.estimated_monthly_savings_usd.toFixed(2)}`;
-        el('analysis').textContent = report.executive_summary;
-        el('scanMeta').textContent = `${report.mode.toUpperCase()} · ${report.region} · ${report.scan_id}`;
-        el('errors').innerHTML = report.collection_errors.length
-          ? `<div class="analysis error"><strong>部分 AWS 資料無法讀取：</strong><br>${report.collection_errors.map(escapeHtml).join('<br>')}</div>`
-          : '';
-
-        if (!report.findings.length) {
-          el('findings').innerHTML = '<div class="empty">目前規則沒有發現問題。</div>';
-          return;
-        }
-
-        el('findings').innerHTML = report.findings.map((item, index) => `
-          <article class="finding">
-            <span class="badge ${item.severity}">${escapeHtml(item.severity)}</span>
-            <div>
-              <h3>${escapeHtml(item.title)}</h3>
-              <p>${escapeHtml(item.description)}</p>
-              <div class="resource">${escapeHtml(item.rule_id)} · ${escapeHtml(item.resource_id)}</div>
-              <button class="plan-btn" data-index="${index}">查看修復計畫</button>
-            </div>
-            <div class="saving">${item.estimated_monthly_savings_usd ? `US$${item.estimated_monthly_savings_usd.toFixed(2)}/月` : ''}</div>
-          </article>
-        `).join('');
-
-        document.querySelectorAll('.plan-btn').forEach(button => {
-          button.addEventListener('click', () => showPlan(state.findings[Number(button.dataset.index)]));
-        });
-      }
-
-      async function showPlan(finding) {
-        const response = await fetch('/api/remediations/plan', {
-          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(finding)
-        });
-        const plan = await response.json();
-        el('planSummary').textContent = plan.summary;
-        el('planBody').textContent = JSON.stringify({
-          action: plan.action,
-          parameters: plan.parameters,
-          verification_steps: plan.verification_steps,
-          references: plan.references,
-          requires_approval: plan.requires_approval,
-          execution_enabled: plan.execution_enabled
-        }, null, 2);
-        el('planDialog').showModal();
-      }
-
-      el('scan').addEventListener('click', async () => {
-        const button = el('scan');
-        button.disabled = true;
-        button.textContent = '掃描中…';
-        el('analysis').textContent = '正在收集資源與執行治理規則。';
-        try {
-          const response = await fetch('/api/scans', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ mode: el('mode').value, region: el('region').value })
-          });
-          const payload = await response.json();
-          if (!response.ok) throw new Error(payload.detail || '掃描失敗');
-          render(payload);
-        } catch (error) {
-          el('analysis').innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
-        } finally {
-          button.disabled = false;
-          button.textContent = '開始掃描';
-        }
-      });
-
-      el('closeDialog').addEventListener('click', () => el('planDialog').close());
-    </script>
-  </body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>採購控制台 | AWS Serverless ERP</title>
+  <style>
+    :root { --ink:#173536; --muted:#6f8581; --paper:#f4f6f0; --panel:#fffefa; --line:#dce7df; --teal:#087f73; --deep:#07584f; --amber:#d9822b; --red:#c44f45; --shadow:0 18px 50px rgba(32,72,58,.08); }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif; background:var(--paper); }
+    body:before { content:""; display:block; height:6px; background:linear-gradient(90deg,var(--deep),#39a88a,var(--amber)); }
+    main { width:min(1240px,calc(100% - 36px)); margin:auto; padding:48px 0 70px; }
+    header { display:flex; justify-content:space-between; align-items:end; gap:24px; margin-bottom:30px; }
+    .eyebrow { color:var(--teal); font-size:12px; font-weight:800; letter-spacing:.14em; }
+    h1 { margin:8px 0 7px; font-family:Georgia,serif; font-size:clamp(34px,5vw,58px); line-height:1; letter-spacing:-.04em; }
+    .subtitle { margin:0; color:var(--muted); line-height:1.7; }
+    .status { display:flex; align-items:center; gap:9px; padding:10px 14px; border:1px solid var(--line); background:#ffffffb8; border-radius:999px; font-size:13px; white-space:nowrap; }
+    .dot { width:9px; height:9px; border-radius:50%; background:#39a66f; box-shadow:0 0 0 4px #39a66f1f; }
+    .dot.error { background:var(--red); box-shadow:0 0 0 4px #c44f4520; }
+    .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:18px; }
+    .kpi,.panel { background:var(--panel); border:1px solid var(--line); box-shadow:var(--shadow); }
+    .kpi { padding:20px; border-radius:4px 18px 4px 18px; }
+    .kpi-label,.panel-note { color:var(--muted); font-size:13px; }
+    .kpi-value { display:block; margin-top:8px; font-size:31px; }
+    .kpi-value.warn { color:var(--red); }
+    .layout { display:grid; grid-template-columns:1.35fr .9fr; gap:18px; align-items:start; }
+    .actions { display:grid; gap:18px; }
+    .panel { border-radius:18px; overflow:hidden; }
+    .panel-head { padding:20px 22px 14px; }
+    .panel-head h2 { margin:0 0 5px; font-size:18px; }
+    .table-wrap { overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; min-width:560px; }
+    th,td { padding:14px 22px; border-top:1px solid var(--line); text-align:left; font-size:13px; white-space:nowrap; }
+    th { color:var(--muted); font-size:11px; letter-spacing:.08em; }
+    .badge { display:inline-flex; padding:5px 9px; border-radius:999px; font-size:11px; font-weight:800; background:#e3f2e9; color:#24734e; }
+    .badge.alert { background:#fce7df; color:var(--red); }
+    .inventory { margin-top:18px; padding-bottom:8px; }
+    .stock-row { display:grid; grid-template-columns:1fr auto; gap:12px; padding:14px 22px; border-top:1px solid var(--line); }
+    .stock-meta { display:flex; justify-content:space-between; gap:14px; font-size:13px; }
+    .stock-bar { height:7px; margin-top:9px; background:#e7eee8; border-radius:8px; overflow:hidden; }
+    .stock-fill { height:100%; background:var(--teal); border-radius:inherit; }
+    .stock-fill.low { background:var(--amber); }
+    .stock-number { font-weight:800; }
+    .stock-number.low { color:var(--red); }
+    form { padding:0 22px 22px; }
+    label { display:block; margin:13px 0 6px; color:var(--muted); font-size:12px; font-weight:700; }
+    select,input,button { font:inherit; }
+    select,input { width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:9px; color:var(--ink); background:#fff; }
+    .item-input { display:grid; grid-template-columns:1fr 100px; gap:8px; align-items:end; }
+    button { border:0; border-radius:9px; padding:12px 16px; font-weight:800; cursor:pointer; }
+    .primary { width:100%; margin-top:18px; background:var(--deep); color:#fff; }
+    button:disabled { opacity:.55; cursor:wait; }
+    .result { margin:0 22px 20px; padding:14px; border-radius:10px; background:#e9f5ed; color:#236543; font-size:13px; line-height:1.6; }
+    .result.alert { background:#fff0e5; color:#934521; }
+    .result.error { background:#fce7e4; color:var(--red); }
+    .empty { padding:24px 22px; color:var(--muted); font-size:13px; }
+    footer { display:flex; justify-content:space-between; gap:14px; margin-top:22px; color:var(--muted); font-size:12px; }
+    @media (max-width:850px) { header { align-items:start; flex-direction:column; } .layout { grid-template-columns:1fr; } .kpis { grid-template-columns:repeat(2,1fr); } }
+    @media (max-width:500px) { main { width:calc(100% - 24px); padding-top:36px; } .kpis { gap:9px; } .kpi { padding:14px; } .kpi-value { font-size:25px; } footer { flex-direction:column; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><div><div class="eyebrow">AWS SERVERLESS ERP / PROCUREMENT</div><h1>採購控制台</h1><p class="subtitle">從採購單到到貨驗收，掌握庫存異動與異常警示。</p></div><div class="status"><span id="healthDot" class="dot"></span><span id="healthText">正在連線 API</span></div></header>
+    <section class="kpis"><div class="kpi"><span class="kpi-label">採購單總數</span><strong id="totalOrders" class="kpi-value">—</strong></div><div class="kpi"><span class="kpi-label">待驗收</span><strong id="pendingReceipts" class="kpi-value">—</strong></div><div class="kpi"><span class="kpi-label">已完成收料</span><strong id="completedReceipts" class="kpi-value">—</strong></div><div class="kpi"><span class="kpi-label">歷史異常收料紀錄</span><strong id="exceptionCount" class="kpi-value warn">—</strong></div></section>
+    <section class="layout"><div><section class="panel"><div class="panel-head"><h2>採購單</h2><span class="panel-note">供應商與驗收狀態</span></div><div class="table-wrap"><table><thead><tr><th>採購單</th><th>供應商</th><th>預計到貨</th><th>狀態</th></tr></thead><tbody id="orders"><tr><td colspan="4" class="empty">載入中…</td></tr></tbody></table></div></section><section class="panel inventory"><div class="panel-head"><h2>庫存水位</h2><span class="panel-note">低於安全庫存會觸發警示</span></div><div id="inventory"><div class="empty">載入中…</div></div></section><section class="panel inventory"><div class="panel-head"><h2>最近庫存異動</h2><span class="panel-note">每筆收料皆保留追溯紀錄</span></div><div id="transactions"><div class="empty">載入中…</div></div></section></div><div class="actions"><section class="panel"><div class="panel-head"><h2>建立 Demo 採購單</h2><span class="panel-note">建立後可立即進行到貨驗收</span></div><form id="poForm"><label for="demoPoId">採購單編號</label><input id="demoPoId" required><label for="demoSupplier">供應商</label><input id="demoSupplier" required value="Demo 供應商"><label for="demoMaterialId">料號</label><input id="demoMaterialId" required value="DEMO-MAT"><label for="demoMaterialName">品名</label><input id="demoMaterialName" required value="Demo 組件"><label for="demoQuantity">訂購數量</label><input id="demoQuantity" required min="1" type="number" value="100"><button class="primary" type="submit">建立待驗收採購單</button></form><div id="poResult" hidden></div></section><section class="panel"><div class="panel-head"><h2>異常處置</h2><span class="panel-note">採購人員處理短缺並保留收料紀錄</span></div><form id="resolutionForm"><label for="exceptionPoSelect">待處理異常採購單</label><select id="exceptionPoSelect" required></select><label for="resolutionAction">處置方式</label><select id="resolutionAction"><option value="補貨">補貨</option><option value="差異允收結案">差異允收結案</option></select><label for="resolutionNote">處置說明</label><input id="resolutionNote" required maxlength="500" placeholder="例如：供應商承諾下批補足"><button class="primary" type="submit">送出異常處置</button></form><div id="resolutionResult" hidden></div></section><section class="panel"><div class="panel-head"><h2>到貨驗收</h2><span class="panel-note">送出後將更新 DynamoDB 庫存</span></div><form id="receiptForm"><label for="poSelect">選擇採購單</label><select id="poSelect" required></select><div id="receiptItems"></div><button class="primary" type="submit">送出驗收並檢查異常</button></form><div id="receiptResult" hidden></div></section></div></section>
+    <footer><span>AWS API Gateway · Lambda · DynamoDB · SNS</span><span id="lastRefresh">尚未更新</span></footer>
+  </main>
+  <script>
+    const state={orders:[],inventory:[]}; var receiptAttemptKey; const $=id=>document.getElementById(id); const esc=value=>String(value??'').replace(/[&<>\'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); const request=async(path,options)=>{const response=await fetch(path,options);const data=await response.json();if(!response.ok)throw new Error(data.detail||'請求失敗');return data;};
+    function renderOrders(){ $('orders').innerHTML=state.orders.length?state.orders.map(o=>`<tr><td><strong>${esc(o.po_id)}</strong></td><td>${esc(o.supplier_name)}</td><td>${esc(o.expected_date)}</td><td><span class="badge ${o.status==='待處理異常'?'alert':''}">${esc(o.status)}</span></td></tr>`).join(''):'<tr><td colspan="4" class="empty">目前沒有採購單</td></tr>'; }
+    function renderInventory(){ $('inventory').innerHTML=state.inventory.length?state.inventory.map(i=>{const low=i.quantity<i.reorder_point;const ratio=Math.min(100,Math.max(8,i.quantity/Math.max(i.reorder_point*2,1)*100));return `<div class="stock-row"><div><div class="stock-meta"><span>${esc(i.material_name)}</span><span>安全庫存 ${i.reorder_point} ${esc(i.unit)}</span></div><div class="stock-bar"><div class="stock-fill ${low?'low':''}" style="width:${ratio}%"></div></div></div><span class="stock-number ${low?'low':''}">${i.quantity} ${esc(i.unit)}</span></div>`}).join(''):'<div class="empty">目前沒有庫存資料</div>'; }
+    function renderTransactions(){ $('transactions').innerHTML=state.transactions.length?state.transactions.slice(0,5).map(t=>{const material=state.inventory.find(i=>i.material_id===t.material_id);const materialName=material?material.material_name:t.material_name;return `<div class="stock-row"><div><strong>${esc(materialName)}</strong><div class="panel-note">${esc(t.material_id)} · ${esc(t.transaction_type)} · ${esc(t.reference_id)} · ${new Date(t.occurred_at).toLocaleString('zh-TW')}</div></div><span class="stock-number">${t.quantity_change>0?'+':''}${t.quantity_change}</span></div>`}).join(''):'<div class="empty">尚無收料異動</div>'; }
+    function renderItems(){const order=state.orders.find(i=>i.po_id===$("poSelect").value);$('receiptItems').innerHTML=order?order.items.map(i=>{const remaining=i.ordered_quantity-i.received_quantity;return `<div class="item-input"><div><label>${esc(i.material_name)}（本次收料；剩餘 ${remaining} / 訂購 ${i.ordered_quantity} ${esc(i.unit)}）</label></div><input required min="0" max="${remaining}" type="number" data-material="${esc(i.material_id)}" value="${remaining}"></div>`}).join(''):'';}
+    async function refresh(){try{const[d,o,i,t]=await Promise.all([request('/api/dashboard'),request('/api/purchase-orders'),request('/api/inventory'),request('/api/inventory-transactions')]);state.orders=o;state.inventory=i;state.transactions=t;const receivable=o.filter(v=>['待驗收','待補貨'].includes(v.status)),exceptions=o.filter(v=>v.status==='待處理異常');$("totalOrders").textContent=d.total_purchase_orders;$("pendingReceipts").textContent=d.pending_receipts;$("completedReceipts").textContent=d.completed_receipts;$("exceptionCount").textContent=d.exception_count;$("poSelect").innerHTML=receivable.map(v=>`<option value="${esc(v.po_id)}">${esc(v.po_id)} · ${esc(v.supplier_name)} · ${esc(v.status)}</option>`).join('');$("exceptionPoSelect").innerHTML=exceptions.map(v=>`<option value="${esc(v.po_id)}">${esc(v.po_id)} · ${esc(v.supplier_name)}</option>`).join('');renderOrders();renderInventory();renderTransactions();renderItems();const receiptSubmit=$("receiptForm").querySelector('button'),resolutionSubmit=$("resolutionForm").querySelector('button');receiptSubmit.disabled=!receivable.length;resolutionSubmit.disabled=!exceptions.length;$("healthText").textContent='API 已連線';$("lastRefresh").textContent=`最後更新 ${new Date().toLocaleTimeString('zh-TW')}`;}catch(e){$("healthDot").classList.add('error');$("healthText").textContent=e.message;}}
+    function nextDemoPoId(){return `DEMO-${new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14)}-${crypto.randomUUID().slice(0,8).toUpperCase()}`;}function nextDemoMaterialId(){return `DEMO-MAT-${crypto.randomUUID().slice(0,8).toUpperCase()}`;}$("demoPoId").value=nextDemoPoId();$("demoMaterialId").value=nextDemoMaterialId();$("poForm").addEventListener('submit',async event=>{event.preventDefault();const button=event.currentTarget.querySelector('button'),result=$("poResult");button.disabled=true;result.hidden=true;try{const data=await request('/api/purchase-orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({po_id:$("demoPoId").value,supplier_name:$("demoSupplier").value,expected_date:new Date().toISOString().slice(0,10),items:[{material_id:$("demoMaterialId").value,material_name:$("demoMaterialName").value,ordered_quantity:Number($("demoQuantity").value)}]})});result.hidden=false;result.className='result';result.textContent=`已建立 ${data.po_id}，可在下方進行驗收。`;$("demoPoId").value=nextDemoPoId();$("demoMaterialId").value=nextDemoMaterialId();await refresh();$("poSelect").value=data.po_id;renderItems();}catch(e){result.hidden=false;result.className='result error';result.textContent=e.message;}finally{button.disabled=false;}});$("resolutionForm").addEventListener('submit',async event=>{event.preventDefault();const button=event.currentTarget.querySelector('button'),result=$("resolutionResult");button.disabled=true;result.hidden=true;try{const data=await request(`/api/purchase-orders/${encodeURIComponent($("exceptionPoSelect").value)}/exception-resolution`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:$("resolutionAction").value,resolved_by:'erp-demo-purchaser',note:$("resolutionNote").value})});result.hidden=false;result.className='result';result.textContent=`${data.po_id} 已更新為 ${data.status}。`;$("resolutionNote").value='';await refresh();$("poSelect").value=data.po_id;renderItems();}catch(e){result.hidden=false;result.className='result error';result.textContent=e.message;}finally{button.disabled=false;}});$("poSelect").addEventListener('change',()=>{receiptAttemptKey=undefined;renderItems();});$("receiptItems").addEventListener('input',()=>{receiptAttemptKey=undefined;});$("receiptForm").addEventListener('submit',async event=>{event.preventDefault();const button=event.currentTarget.querySelector('button'),result=$("receiptResult");button.disabled=true;button.textContent='送出中…';result.hidden=true;try{const items=[...document.querySelectorAll('#receiptItems input')].map(i=>({material_id:i.dataset.material,received_quantity:Number(i.value)}));receiptAttemptKey||=`ui-${crypto.randomUUID()}`;const data=await request('/api/receipts',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':receiptAttemptKey},body:JSON.stringify({po_id:$("poSelect").value,received_by:'erp-demo-user',items})});receiptAttemptKey=undefined;result.hidden=false;result.className=`result ${data.status==='待處理異常'?'alert':''}`;result.innerHTML=`<strong>${esc(data.status)}</strong><br>${data.exceptions.length?data.exceptions.map(esc).join('<br>'):'驗收完成，庫存已更新。'}<br><small>收料單：${esc(data.receipt_id)} · SNS 警示已送出</small>`;await refresh();}catch(e){result.hidden=false;result.className='result error';result.textContent=e.message;}finally{button.disabled=false;button.textContent='送出驗收並檢查異常';}}); refresh();
+  </script>
+</body>
 </html>

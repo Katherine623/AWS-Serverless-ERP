@@ -9,6 +9,7 @@ pytest-cache-files-*/
 htmlcov/
 .env
 .terraform/
+infra/.lambda-build/
 *.tfstate
 *.tfstate.*
 *.tfvars

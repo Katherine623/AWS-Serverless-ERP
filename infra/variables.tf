@@ -10,14 +10,8 @@ variable "project_name" {
   default     = "erp-receiving-platform"
 }
 
-variable "image_uri" {
-  description = "ECR image URI including an immutable tag or digest."
-  type        = string
-}
-
 variable "bedrock_model_id" {
   description = "Optional Bedrock model ID for generated summaries."
   type        = string
   default     = ""
 }
-
