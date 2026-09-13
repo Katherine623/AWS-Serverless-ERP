@@ -63,6 +63,15 @@ class ErpRepository(Protocol):
     def mark_alert_batch_published(self, batch_id: str) -> None:
         ...
 
+    def save_exception_resolution(
+        self,
+        order: Any,
+        previous_order: Any,
+        inventory: list[tuple[Any, Any | None]],
+        inventory_transactions: list[Any],
+    ) -> None:
+        ...
+
     def save_purchase_order(self, order: Any, previous_order: Any) -> None:
         ...
 
@@ -152,6 +161,21 @@ class InMemoryRepository:
         if self.purchase_orders.get(order.po_id) != previous_order:
             raise IdempotencyConflictError("採購單已由另一筆操作更新，請重新整理後再試")
         self.purchase_orders[order.po_id] = order
+
+    def save_exception_resolution(
+        self,
+        order: Any,
+        previous_order: Any,
+        inventory: list[tuple[Any, Any | None]],
+        inventory_transactions: list[Any],
+    ) -> None:
+        if self.purchase_orders.get(order.po_id) != previous_order:
+            raise IdempotencyConflictError("採購單已由另一筆操作更新，請重新整理後再試")
+        self.purchase_orders[order.po_id] = order
+        for item, _ in inventory:
+            self.inventory[item.material_id] = item
+        for transaction in inventory_transactions:
+            self.inventory_transactions[transaction.transaction_id] = transaction
 
     def receipt_count(self) -> int:
         return len(self.receipts)
@@ -414,6 +438,67 @@ class DynamoDbRepository:
             if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 raise IdempotencyConflictError(
                     "採購單已由另一筆操作更新，請重新整理後再試"
+                ) from exc
+            raise
+
+    def save_exception_resolution(
+        self,
+        order: Any,
+        previous_order: Any,
+        inventory: list[tuple[Any, Any | None]],
+        inventory_transactions: list[Any],
+    ) -> None:
+        actions: list[dict[str, Any]] = [
+            {
+                "Put": {
+                    "TableName": self._table.name,
+                    "Item": self._item("purchase_order", order.po_id, order),
+                    "ConditionExpression": "#data = :previous",
+                    "ExpressionAttributeNames": {"#data": "data"},
+                    "ExpressionAttributeValues": {
+                        ":previous": json.dumps(
+                            previous_order.model_dump(mode="json"), ensure_ascii=False
+                        )
+                    },
+                }
+            }
+        ]
+        for item, previous in inventory:
+            if not previous:
+                raise IdempotencyConflictError("找不到要更新的庫存資料")
+            actions.append(
+                {
+                    "Put": {
+                        "TableName": self._table.name,
+                        "Item": self._item("inventory", item.material_id, item),
+                        "ConditionExpression": "#data = :previous",
+                        "ExpressionAttributeNames": {"#data": "data"},
+                        "ExpressionAttributeValues": {
+                            ":previous": json.dumps(
+                                previous.model_dump(mode="json"), ensure_ascii=False
+                            )
+                        },
+                    }
+                }
+            )
+        for transaction in inventory_transactions:
+            actions.append(
+                {
+                    "Put": {
+                        "TableName": self._table.name,
+                        "Item": self._item(
+                            "inventory_transaction", transaction.transaction_id, transaction
+                        ),
+                        "ConditionExpression": "attribute_not_exists(PK)",
+                    }
+                }
+            )
+        try:
+            self._table.meta.client.transact_write_items(TransactItems=actions)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "TransactionCanceledException":
+                raise IdempotencyConflictError(
+                    "採購單或庫存已由另一筆操作更新，請重新整理後再試"
                 ) from exc
             raise
 

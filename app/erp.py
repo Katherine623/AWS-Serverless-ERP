@@ -119,6 +119,7 @@ class InventoryTransaction(BaseModel):
     material_id: str
     material_name: str
     quantity_change: int
+    quarantine_quantity_change: int = 0
     transaction_type: str = "收料"
     reference_id: str
     performed_by: str
@@ -129,6 +130,7 @@ class InventoryItem(BaseModel):
     material_id: str = Field(min_length=1, max_length=80)
     material_name: str = Field(min_length=1, max_length=160)
     quantity: int = Field(ge=0)
+    quarantine_quantity: int = Field(default=0, ge=0)
     unit: str = Field(default="pcs", min_length=1, max_length=20)
     reorder_point: int = Field(default=10, ge=0)
     updated_at: datetime
@@ -309,6 +311,8 @@ class ErpStore:
             for material_id, item in ordered.items():
                 quantity = received[material_id]
                 remaining = item.ordered_quantity - item.received_quantity
+                accepted_quantity = min(quantity, max(remaining, 0))
+                quarantine_quantity = quantity - accepted_quantity
                 if quantity > remaining:
                     exceptions.append(
                         f"{item.material_name} 超收 {quantity - remaining} {item.unit}"
@@ -322,13 +326,15 @@ class ErpStore:
                 previous_inventory = self.repository.get_inventory(material_id)
                 if previous_inventory:
                     inventory = previous_inventory.model_copy(deep=True)
-                    inventory.quantity += quantity
+                    inventory.quantity += accepted_quantity
+                    inventory.quarantine_quantity += quarantine_quantity
                     inventory.updated_at = datetime.now(UTC)
                 else:
                     inventory = InventoryItem(
                         material_id=material_id,
                         material_name=item.material_name,
-                        quantity=quantity,
+                        quantity=accepted_quantity,
+                        quarantine_quantity=quarantine_quantity,
                         unit=item.unit,
                         updated_at=datetime.now(UTC),
                     )
@@ -338,7 +344,8 @@ class ErpStore:
                         transaction_id=f"INV-{uuid4().hex[:12].upper()}",
                         material_id=material_id,
                         material_name=item.material_name,
-                        quantity_change=quantity,
+                        quantity_change=accepted_quantity,
+                        quarantine_quantity_change=quarantine_quantity,
                         reference_id=request.po_id,
                         performed_by=request.received_by,
                         occurred_at=datetime.now(UTC),
@@ -437,13 +444,44 @@ class ErpStore:
             updated_order.exception_resolved_by = request.resolved_by
             updated_order.exception_note = request.note
             updated_order.exception_resolved_at = datetime.now(UTC)
+            inventory_updates: list[tuple[InventoryItem, InventoryItem | None]] = []
+            inventory_transactions: list[InventoryTransaction] = []
             if request.action == "差異允收結案":
                 updated_order.approved_variances = {
                     item.material_id: item.ordered_quantity - item.received_quantity
                     for item in updated_order.items
                     if item.received_quantity != item.ordered_quantity
                 }
-            self.repository.save_purchase_order(updated_order, previous_order)
+                for item in updated_order.items:
+                    overage = item.received_quantity - item.ordered_quantity
+                    if overage <= 0:
+                        continue
+                    previous_inventory = self.repository.get_inventory(item.material_id)
+                    if not previous_inventory or previous_inventory.quarantine_quantity < overage:
+                        raise ValueError(f"料號 {item.material_id} 的隔離庫存不足，無法允收")
+                    inventory = previous_inventory.model_copy(deep=True)
+                    inventory.quantity += overage
+                    inventory.quarantine_quantity -= overage
+                    inventory.updated_at = updated_order.exception_resolved_at
+                    inventory_updates.append((inventory, previous_inventory))
+                    inventory_transactions.append(
+                        InventoryTransaction(
+                            transaction_id=f"INV-{uuid4().hex[:12].upper()}",
+                            material_id=item.material_id,
+                            material_name=item.material_name,
+                            quantity_change=overage,
+                            transaction_type="差異允收",
+                            reference_id=po_id,
+                            performed_by=request.resolved_by,
+                            occurred_at=updated_order.exception_resolved_at,
+                        )
+                    )
+            self.repository.save_exception_resolution(
+                updated_order,
+                previous_order,
+                inventory_updates,
+                inventory_transactions,
+            )
             return updated_order
 
 

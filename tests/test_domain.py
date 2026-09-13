@@ -55,6 +55,9 @@ def test_over_receipt_is_recorded_as_exception() -> None:
 
     assert result.status == "待處理異常"
     assert result.exceptions == ["Test material 超收 2 pcs"]
+    inventory = next(item for item in store.list_inventory() if item.material_id == "TEST-MAT-001")
+    assert inventory.quantity == 10
+    assert inventory.quarantine_quantity == 2
 
 
 def test_over_receipt_can_only_be_closed_as_approved_difference() -> None:
@@ -81,6 +84,10 @@ def test_over_receipt_can_only_be_closed_as_approved_difference() -> None:
 
     assert closed.status == "差異結案"
     assert closed.approved_variances == {"TEST-MAT-001": -2}
+    inventory = next(item for item in store.list_inventory() if item.material_id == "TEST-MAT-001")
+    assert inventory.quantity == 12
+    assert inventory.quarantine_quantity == 0
+    assert store.list_inventory_transactions()[0].transaction_type == "差異允收"
 
 
 def test_failed_alert_delivery_keeps_pending_outbox_batch() -> None:
