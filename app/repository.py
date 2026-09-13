@@ -225,7 +225,7 @@ class InMemoryRepository:
         if material_id:
             items = [item for item in items if item.material_id == material_id]
         if low_stock:
-            items = [item for item in items if item.quantity <= item.reorder_point]
+            items = [item for item in items if item.quantity < item.reorder_point]
         return self._page(
             items,
             limit,
@@ -650,7 +650,7 @@ class DynamoDbRepository:
             key_condition=key_condition,
             predicate=(
                 lambda item: int(json.loads(item["data"]).get("quantity", 0))
-                <= int(json.loads(item["data"]).get("reorder_point", 0))
+                < int(json.loads(item["data"]).get("reorder_point", 0))
                 if low_stock
                 else True
             ),

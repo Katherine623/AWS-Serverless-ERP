@@ -48,6 +48,7 @@ def test_page_filters_are_applied_and_cursor_is_bound_to_filter() -> None:
 def test_inventory_and_transaction_filters_are_applied() -> None:
     repository = InMemoryRepository()
     ErpStore(repository=repository)
+    repository.inventory["MAT-1002"].quantity = repository.inventory["MAT-1002"].reorder_point
 
     low_stock, cursor = repository.list_inventory_page(10, None, low_stock=True)
     assert cursor is None
