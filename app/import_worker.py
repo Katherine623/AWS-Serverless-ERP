@@ -69,7 +69,21 @@ def _import_workbook(bucket: str, key: str) -> int:
             )
         imported = 0
         for payload in grouped.values():
-            store.create_purchase_order(CreatePurchaseOrderRequest.model_validate(payload))
+            request = CreatePurchaseOrderRequest.model_validate(payload)
+            try:
+                store.create_purchase_order(request)
+            except ValueError:
+                existing = store.repository.get_purchase_order(request.po_id)
+                same_definition = existing and (
+                    existing.supplier_name == request.supplier_name
+                    and existing.expected_date == request.expected_date
+                    and [item.model_dump(exclude={"received_quantity"}) for item in existing.items]
+                    == [item.model_dump() for item in request.items]
+                )
+                if not same_definition:
+                    raise
+                logger.info("Skipped duplicate idempotent PO import %s", request.po_id)
+                continue
             imported += 1
         return imported
     finally:
