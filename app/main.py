@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from mangum import Mangum
 
@@ -26,6 +27,14 @@ app = FastAPI(
 )
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    request_id = request.headers.get("X-Request-Id") or f"req-{uuid4().hex}"
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    return response
 
 
 @app.get("/", include_in_schema=False)
