@@ -42,6 +42,7 @@ Evidence: `app/main.py`, `app/erp.py`, `app/repository.py`, `infra/main.tf`
 - Optional JWT authorizer、explicit CORS origins、`X-Request-Id` correlation header
 - JWT role guard（purchaser / warehouse / approver / admin）與 actor audit identity
 - 可用／隔離庫存、退貨／報廢調整與帶 filter 的 cursor pagination
+- 新版作業台整合 JWT 提示、PO / 庫存篩選分頁、調整與 Excel 匯入操作
 
 ## CURRENT optional deployment / remaining roadmap
 

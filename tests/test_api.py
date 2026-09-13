@@ -36,6 +36,8 @@ def test_dashboard_contains_erp_metrics() -> None:
     assert response.status_code == 200
     assert response.json()["total_purchase_orders"] == 2
     assert response.json()["inventory_item_count"] == 3
+    assert response.json()["low_stock_count"] == 1
+    assert response.json()["quarantine_total"] == 0
 
 
 def test_creating_purchase_order_assigns_pending_status_and_timestamp() -> None:

@@ -61,7 +61,7 @@ python -m pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 ```
 
-開啟 <http://127.0.0.1:8000>，API 文件位於 <http://127.0.0.1:8000/docs>。
+開啟 <http://127.0.0.1:8000>，API 文件位於 <http://127.0.0.1:8000/docs>。新版作業台已直接整合 PO 篩選／cursor 分頁、低庫存與隔離庫存 KPI、收料、異常處置、庫存調整、Excel 上傳與 JWT token 設定；不需要切換到 Swagger 才能操作。
 
 ## API
 

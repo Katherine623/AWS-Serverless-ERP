@@ -170,7 +170,7 @@ function bulletList(slide, items, x, y, w, color = c.teal) {
 
 // 7. Architecture
 {
-  const slide = base("AWS 架構與資料流", "以 API Gateway + Lambda + DynamoDB + SNS 組合，並可選擇 CDN、Cognito 與 XLSX import。", 7);
+  const slide = base("AWS 架構與資料流", "以 API Gateway + Lambda + DynamoDB + SNS 組合，作業台直接整合篩選、調整與 XLSX import。", 7);
   const nodes = [["Web UI", "Browser Dashboard", 0.72, c.deep], ["API Gateway", "HTTP API", 3.0, c.teal], ["API Lambda", "FastAPI / Mangum", 5.28, c.green], ["DynamoDB", "PO · Receipt · Inventory\nLedger · Outbox", 7.56, c.teal], ["Alert worker", "EventBridge replay", 10.3, c.amber]];
   nodes.forEach(([title, detail, x, accent], index) => {
     box(slide, x, 2.05, index === 3 ? 2.23 : 1.75, 1.28, { line: { color: accent, width: 1.1 } });

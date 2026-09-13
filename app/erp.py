@@ -188,6 +188,8 @@ class DashboardSummary(BaseModel):
     completed_receipts: int
     exception_count: int
     inventory_item_count: int
+    low_stock_count: int = 0
+    quarantine_total: int = 0
 
 
 class PurchaseOrderPage(BaseModel):
@@ -282,6 +284,7 @@ class ErpStore:
     def dashboard(self) -> DashboardSummary:
         with self._lock:
             orders = self.repository.list_purchase_orders()
+            inventory = self.repository.list_inventory()
             completed = self.repository.completed_receipt_count()
             exceptions = self.repository.exception_count()
             pending = sum(
@@ -293,7 +296,9 @@ class ErpStore:
                 pending_receipts=pending,
                 completed_receipts=completed,
                 exception_count=exceptions,
-                inventory_item_count=len(self.repository.list_inventory()),
+                inventory_item_count=len(inventory),
+                low_stock_count=sum(item.quantity < item.reorder_point for item in inventory),
+                quarantine_total=sum(item.quarantine_quantity for item in inventory),
             )
 
     def list_purchase_orders(self) -> list[PurchaseOrder]:
