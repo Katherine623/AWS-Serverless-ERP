@@ -13,13 +13,55 @@ provider "aws" {
   region = var.aws_region
 }
 
+locals {
+  managed_cognito_issuer   = var.manage_cognito_user_pool ? "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.erp[0].id}" : ""
+  managed_cognito_audience = var.manage_cognito_user_pool ? aws_cognito_user_pool_client.erp[0].id : ""
+  jwt_issuer               = var.manage_cognito_user_pool ? local.managed_cognito_issuer : var.cognito_issuer_url
+  jwt_audience             = var.manage_cognito_user_pool ? local.managed_cognito_audience : var.cognito_audience
+}
+
+resource "aws_cognito_user_pool" "erp" {
+  count = var.manage_cognito_user_pool ? 1 : 0
+  name  = var.cognito_user_pool_name != "" ? var.cognito_user_pool_name : "${var.project_name}-users"
+
+  username_attributes = ["email"]
+
+  password_policy {
+    minimum_length                   = 12
+    require_lowercase                = true
+    require_numbers                  = true
+    require_symbols                  = true
+    require_uppercase                = true
+    temporary_password_validity_days = 1
+  }
+
+  auto_verified_attributes = ["email"]
+  tags                     = var.tags
+}
+
+resource "aws_cognito_user_pool_client" "erp" {
+  count                         = var.manage_cognito_user_pool ? 1 : 0
+  name                          = "${var.project_name}-api"
+  user_pool_id                  = aws_cognito_user_pool.erp[0].id
+  generate_secret               = false
+  prevent_user_existence_errors = "ENABLED"
+  explicit_auth_flows           = ["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
+}
+
+resource "aws_cognito_user_group" "erp_roles" {
+  for_each     = var.manage_cognito_user_pool ? toset(["admin", "approver", "purchaser", "warehouse"]) : toset([])
+  name         = each.key
+  user_pool_id = aws_cognito_user_pool.erp[0].id
+  description  = "ERP ${each.key} role"
+}
+
 resource "terraform_data" "auth_config" {
-  input = var.api_auth_enabled
+  input = jsonencode({ enabled = var.api_auth_enabled, managed = var.manage_cognito_user_pool })
 
   lifecycle {
     precondition {
       condition = !var.api_auth_enabled || (
-        var.cognito_issuer_url != "" && var.cognito_audience != ""
+        local.jwt_issuer != "" && local.jwt_audience != ""
       )
       error_message = "cognito_issuer_url and cognito_audience are required when API auth is enabled."
     }
@@ -275,8 +317,8 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
   name             = "${var.project_name}-jwt"
 
   jwt_configuration {
-    audience = [var.cognito_audience]
-    issuer   = var.cognito_issuer_url
+    audience = [local.jwt_audience]
+    issuer   = local.jwt_issuer
   }
 }
 

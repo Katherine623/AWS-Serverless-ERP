@@ -27,3 +27,13 @@ output "alert_worker_arn" {
   description = "Lambda worker that replays pending ERP alert batches."
   value       = aws_lambda_function.alert_worker.arn
 }
+
+output "cognito_user_pool_id" {
+  description = "Managed Cognito user pool ID, when enabled."
+  value       = var.manage_cognito_user_pool ? aws_cognito_user_pool.erp[0].id : null
+}
+
+output "cognito_client_id" {
+  description = "Managed Cognito app client ID, when enabled."
+  value       = var.manage_cognito_user_pool ? aws_cognito_user_pool_client.erp[0].id : null
+}

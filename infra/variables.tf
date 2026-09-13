@@ -101,6 +101,18 @@ variable "cognito_audience" {
   default     = ""
 }
 
+variable "manage_cognito_user_pool" {
+  description = "Create a Cognito user pool, app client and ERP role groups."
+  type        = bool
+  default     = false
+}
+
+variable "cognito_user_pool_name" {
+  description = "Optional Cognito user pool name when managed by this stack."
+  type        = string
+  default     = ""
+}
+
 variable "cors_allowed_origins" {
   description = "Explicit browser origins allowed to call the HTTP API."
   type        = list(string)

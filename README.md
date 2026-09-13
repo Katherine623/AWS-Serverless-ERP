@@ -91,7 +91,7 @@ python -m app.mcp_server
 
 目前提供 Dashboard、採購單、庫存與庫存異動查詢；建立 PO、收料與異常處置都要求 `approved=true`，且還必須設定 `ERP_MCP_MUTATIONS_ENABLED=true` 才會執行變更。預設為唯讀。
 
-HTTP API 在 `local` / `test` 使用 demo actor；`staging` / `production` 必須由 API Gateway JWT 提供 `sub` 與 `roles` / `cognito:groups`。建立 PO 需要 `purchaser`、收料需要 `warehouse`、異常結案需要 `approver`；`admin` 可執行全部操作。操作者身份由 JWT subject 記錄，不接受前端自行指定。
+HTTP API 在 `local` / `test` 使用 demo actor；`staging` / `production` 必須由 API Gateway JWT 提供 `sub` 與 `roles` / `cognito:groups`。建立 PO 需要 `purchaser`、收料需要 `warehouse`、異常結案需要 `approver`；`admin` 可執行全部操作。操作者身份由 JWT subject 記錄，不接受前端自行指定。Terraform 設定 `manage_cognito_user_pool=true` 時，會一併建立 user pool、app client 與四個 ERP role groups；也可以改用既有 Cognito issuer/audience。
 
 ## 測試與部署
 
