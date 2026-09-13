@@ -150,7 +150,10 @@ resource "aws_iam_role_policy" "lambda_data" {
         "dynamodb:Scan",
         "dynamodb:TransactWriteItems"
       ]
-      Resource = aws_dynamodb_table.erp.arn
+      Resource = [
+        aws_dynamodb_table.erp.arn,
+        "${aws_dynamodb_table.erp.arn}/index/*",
+      ]
     }]
   })
 }
