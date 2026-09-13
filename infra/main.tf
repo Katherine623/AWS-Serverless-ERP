@@ -741,6 +741,7 @@ resource "aws_s3_bucket_notification" "imports" {
   queue {
     queue_arn     = aws_sqs_queue.imports[0].arn
     events        = ["s3:ObjectCreated:Put", "s3:ObjectCreated:CompleteMultipartUpload"]
+    filter_prefix = "incoming/"
     filter_suffix = ".xlsx"
   }
 
