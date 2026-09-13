@@ -4,6 +4,7 @@ import json
 from typing import Any, Protocol
 
 import boto3
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from app.alerts import AlertEvent
@@ -186,24 +187,40 @@ class DynamoDbRepository:
         model = getattr(erp, model_name)
         return model.model_validate(json.loads(item["data"]))
 
-    def _scan_items(self, **kwargs: Any) -> list[dict[str, Any]]:
+    def _query_items(self, entity: str, **kwargs: Any) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
-        response = self._table.scan(**kwargs)
+        response = self._table.query(
+            IndexName="EntityIndex",
+            KeyConditionExpression=Key("entity").eq(entity),
+            **kwargs,
+        )
         items.extend(response.get("Items", []))
         while "LastEvaluatedKey" in response:
-            response = self._table.scan(
-                **kwargs, ExclusiveStartKey=response["LastEvaluatedKey"]
+            response = self._table.query(
+                IndexName="EntityIndex",
+                KeyConditionExpression=Key("entity").eq(entity),
+                **kwargs,
+                ExclusiveStartKey=response["LastEvaluatedKey"],
             )
             items.extend(response.get("Items", []))
         return items
 
-    def _scan_count(self, **kwargs: Any) -> int:
+    def _query_count(self, entity: str, **kwargs: Any) -> int:
         total = 0
-        response = self._table.scan(**kwargs, Select="COUNT")
+        response = self._table.query(
+            IndexName="EntityIndex",
+            KeyConditionExpression=Key("entity").eq(entity),
+            **kwargs,
+            Select="COUNT",
+        )
         total += int(response.get("Count", 0))
         while "LastEvaluatedKey" in response:
-            response = self._table.scan(
-                **kwargs, Select="COUNT", ExclusiveStartKey=response["LastEvaluatedKey"]
+            response = self._table.query(
+                IndexName="EntityIndex",
+                KeyConditionExpression=Key("entity").eq(entity),
+                **kwargs,
+                Select="COUNT",
+                ExclusiveStartKey=response["LastEvaluatedKey"],
             )
             total += int(response.get("Count", 0))
         return total
@@ -214,11 +231,7 @@ class DynamoDbRepository:
         return self._model(item, "PurchaseOrder") if item else None
 
     def list_purchase_orders(self) -> list[Any]:
-        items = self._scan_items(
-            FilterExpression="#entity = :entity",
-            ExpressionAttributeNames={"#entity": "entity"},
-            ExpressionAttributeValues={":entity": "purchase_order"},
-        )
+        items = self._query_items("purchase_order")
         return [self._model(item, "PurchaseOrder") for item in items]
 
     def create_purchase_order(self, order: Any) -> Any:
@@ -244,11 +257,7 @@ class DynamoDbRepository:
                 raise
 
     def list_inventory(self) -> list[Any]:
-        items = self._scan_items(
-            FilterExpression="#entity = :entity",
-            ExpressionAttributeNames={"#entity": "entity"},
-            ExpressionAttributeValues={":entity": "inventory"},
-        )
+        items = self._query_items("inventory")
         return [self._model(item, "InventoryItem") for item in items]
 
     def get_inventory(self, material_id: str) -> Any | None:
@@ -257,11 +266,7 @@ class DynamoDbRepository:
         return self._model(item, "InventoryItem") if item else None
 
     def list_inventory_transactions(self) -> list[Any]:
-        items = self._scan_items(
-            FilterExpression="#entity = :entity",
-            ExpressionAttributeNames={"#entity": "entity"},
-            ExpressionAttributeValues={":entity": "inventory_transaction"},
-        )
+        items = self._query_items("inventory_transaction")
         return [self._model(item, "InventoryTransaction") for item in items]
 
     def receipt_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
@@ -366,6 +371,7 @@ class DynamoDbRepository:
                             "PK": f"alert_batch#{result.receipt_id}",
                             "SK": "META",
                             "entity": "alert_batch",
+                            "entity_key": result.receipt_id,
                             "status": "pending",
                             "data": json.dumps(
                                 [event.model_dump(mode="json") for event in alerts],
@@ -412,24 +418,22 @@ class DynamoDbRepository:
             raise
 
     def receipt_count(self) -> int:
-        return self._scan_count(
-            FilterExpression="#entity = :entity",
-            ExpressionAttributeNames={"#entity": "entity"},
-            ExpressionAttributeValues={":entity": "receipt"},
-        )
+        return self._query_count("receipt")
 
     def exception_count(self) -> int:
-        return self._scan_count(
-            FilterExpression="#entity = :entity AND #has_exceptions = :true",
-            ExpressionAttributeNames={"#entity": "entity", "#has_exceptions": "has_exceptions"},
-            ExpressionAttributeValues={":entity": "receipt", ":true": True},
+        return self._query_count(
+            "receipt",
+            FilterExpression="#has_exceptions = :true",
+            ExpressionAttributeNames={"#has_exceptions": "has_exceptions"},
+            ExpressionAttributeValues={":true": True},
         )
 
     def completed_receipt_count(self) -> int:
-        return self._scan_count(
-            FilterExpression="#entity = :entity AND #status = :status",
-            ExpressionAttributeNames={"#entity": "entity", "#status": "status"},
-            ExpressionAttributeValues={":entity": "receipt", ":status": "已完成"},
+        return self._query_count(
+            "receipt",
+            FilterExpression="#status = :status",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":status": "已完成"},
         )
 
     def seed_inventory(self, item: Any) -> None:
@@ -443,10 +447,11 @@ class DynamoDbRepository:
                 raise
 
     def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
-        items = self._scan_items(
-            FilterExpression="#entity = :entity AND #status = :status",
-            ExpressionAttributeNames={"#entity": "entity", "#status": "status"},
-            ExpressionAttributeValues={":entity": "alert_batch", ":status": "pending"},
+        items = self._query_items(
+            "alert_batch",
+            FilterExpression="#status = :status",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":status": "pending"},
         )
         return [
             (

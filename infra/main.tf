@@ -44,6 +44,23 @@ resource "aws_dynamodb_table" "erp" {
     type = "S"
   }
 
+  attribute {
+    name = "entity"
+    type = "S"
+  }
+
+  attribute {
+    name = "entity_key"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "EntityIndex"
+    hash_key        = "entity"
+    range_key       = "entity_key"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery {
     enabled = var.enable_pitr
   }
@@ -114,6 +131,7 @@ resource "aws_iam_role_policy" "lambda_data" {
         "dynamodb:GetItem",
         "dynamodb:PutItem",
         "dynamodb:UpdateItem",
+        "dynamodb:Query",
         "dynamodb:Scan",
         "dynamodb:TransactWriteItems"
       ]
