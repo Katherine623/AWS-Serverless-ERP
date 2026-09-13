@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from enum import StrEnum
 from threading import Lock
 from uuid import uuid4
 
@@ -24,13 +25,6 @@ class PurchaseOrderItem(BaseModel):
     received_quantity: int = Field(default=0, ge=0)
     unit: str = "pcs"
 
-    @model_validator(mode="after")
-    def validate_received_quantity(self) -> PurchaseOrderItem:
-        if self.received_quantity > self.ordered_quantity:
-            raise ValueError("已收數量不可超過訂購數量")
-        return self
-
-
 class CreatePurchaseOrderItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -43,7 +37,7 @@ class CreatePurchaseOrderItem(BaseModel):
 class PurchaseOrder(BaseModel):
     po_id: str
     supplier_name: str
-    expected_date: str
+    expected_date: date
     status: str
     items: list[PurchaseOrderItem]
     created_at: datetime
@@ -64,7 +58,7 @@ class PurchaseOrder(BaseModel):
 class CreatePurchaseOrderRequest(BaseModel):
     po_id: str
     supplier_name: str
-    expected_date: str
+    expected_date: date
     items: list[CreatePurchaseOrderItem] = Field(min_length=1, max_length=48)
 
     @model_validator(mode="after")
@@ -135,6 +129,20 @@ class DashboardSummary(BaseModel):
     inventory_item_count: int
 
 
+class PurchaseOrderStatus(StrEnum):
+    PENDING = "待驗收"
+    EXCEPTION = "待處理異常"
+    REPLENISHMENT = "待補貨"
+    COMPLETED = "已完成"
+    CLOSED = "差異結案"
+
+
+RECEIVABLE_STATUSES = {
+    PurchaseOrderStatus.PENDING,
+    PurchaseOrderStatus.REPLENISHMENT,
+}
+
+
 class ErpStore:
     def __init__(
         self,
@@ -200,7 +208,8 @@ class ErpStore:
             completed = self.repository.completed_receipt_count()
             exceptions = self.repository.exception_count()
             pending = sum(
-                order.status == "待驗收" for order in self.repository.list_purchase_orders()
+                order.status in RECEIVABLE_STATUSES
+                for order in self.repository.list_purchase_orders()
             )
             return DashboardSummary(
                 total_purchase_orders=len(self.repository.list_purchase_orders()),
@@ -284,8 +293,8 @@ class ErpStore:
                 quantity = received[material_id]
                 remaining = item.ordered_quantity - item.received_quantity
                 if quantity > remaining:
-                    raise ValueError(
-                        f"{item.material_name} 收料數量不可超過剩餘待收 {remaining} {item.unit}"
+                    exceptions.append(
+                        f"{item.material_name} 超收 {quantity - remaining} {item.unit}"
                     )
                 item.received_quantity += quantity
                 if item.received_quantity < item.ordered_quantity:
@@ -318,7 +327,11 @@ class ErpStore:
                         occurred_at=datetime.now(UTC),
                     )
                 )
-            status = "待處理異常" if exceptions else "已完成"
+            status = (
+                PurchaseOrderStatus.EXCEPTION.value
+                if exceptions
+                else PurchaseOrderStatus.COMPLETED.value
+            )
             order.status = status
             result = ReceiptResult(
                 receipt_id=f"RCV-{uuid4().hex[:8].upper()}",
@@ -380,7 +393,16 @@ class ErpStore:
                 raise IdempotencyConflictError(f"採購單 {po_id} 沒有待處理異常")
             previous_order = order.model_copy(deep=True)
             updated_order = order.model_copy(deep=True)
-            updated_order.status = "待補貨" if request.action == "補貨" else "差異結案"
+            shortage_exists = any(
+                item.received_quantity < item.ordered_quantity for item in updated_order.items
+            )
+            if request.action == "補貨" and not shortage_exists:
+                raise ValueError("目前異常沒有短缺品項，不能選擇補貨")
+            updated_order.status = (
+                PurchaseOrderStatus.REPLENISHMENT.value
+                if request.action == "補貨"
+                else PurchaseOrderStatus.CLOSED.value
+            )
             updated_order.exception_action = request.action
             updated_order.exception_resolved_by = request.resolved_by
             updated_order.exception_note = request.note
@@ -389,7 +411,7 @@ class ErpStore:
                 updated_order.approved_variances = {
                     item.material_id: item.ordered_quantity - item.received_quantity
                     for item in updated_order.items
-                    if item.received_quantity < item.ordered_quantity
+                    if item.received_quantity != item.ordered_quantity
                 }
             self.repository.save_purchase_order(updated_order, previous_order)
             return updated_order
