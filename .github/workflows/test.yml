@@ -28,3 +28,12 @@ jobs:
         working-directory: infra
       - run: terraform validate
         working-directory: infra
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/dependency-review-action@v4
