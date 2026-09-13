@@ -37,6 +37,11 @@ def test_page_filters_are_applied_and_cursor_is_bound_to_filter() -> None:
     with pytest.raises(ValueError, match="篩選條件"):
         repository.list_purchase_orders_page(1, cursor, status="已完成")
 
+    _, unfiltered_cursor = repository.list_purchase_orders_page(1, None)
+    assert unfiltered_cursor is not None
+    with pytest.raises(ValueError, match="篩選條件"):
+        repository.list_inventory_page(1, unfiltered_cursor)
+
 
 def test_inventory_and_transaction_filters_are_applied() -> None:
     repository = InMemoryRepository()

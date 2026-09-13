@@ -194,7 +194,12 @@ class InMemoryRepository:
             items = [item for item in items if item.status == status]
         if supplier_name:
             items = [item for item in items if item.supplier_name == supplier_name]
-        return self._page(items, limit, cursor, scope=self._scope(status, supplier_name))
+        return self._page(
+            items,
+            limit,
+            cursor,
+            scope=self._scope("purchase_order", status, supplier_name),
+        )
 
     def create_purchase_order(self, order: Any) -> Any:
         if order.po_id in self.purchase_orders:
@@ -221,7 +226,12 @@ class InMemoryRepository:
             items = [item for item in items if item.material_id == material_id]
         if low_stock:
             items = [item for item in items if item.quantity <= item.reorder_point]
-        return self._page(items, limit, cursor, scope=self._scope(material_id, low_stock))
+        return self._page(
+            items,
+            limit,
+            cursor,
+            scope=self._scope("inventory", material_id, low_stock),
+        )
 
     def get_inventory(self, material_id: str) -> Any | None:
         return self.inventory.get(material_id)
@@ -249,7 +259,7 @@ class InMemoryRepository:
             items,
             limit,
             cursor,
-            scope=self._scope(material_id, transaction_type),
+            scope=self._scope("inventory_transaction", material_id, transaction_type),
         )
 
     @staticmethod
@@ -567,7 +577,11 @@ class DynamoDbRepository:
         expression, names, values = self._data_filter(
             [(field, value) for field, value in filters if value]
         )
-        scope = json.dumps(filters, ensure_ascii=False, separators=(",", ":"))
+        scope = json.dumps(
+            {"entity": "purchase_order", "filters": filters},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         items, next_cursor = self._query_page(
             "purchase_order",
             limit,
@@ -616,7 +630,11 @@ class DynamoDbRepository:
         key_condition = Key("entity").eq("inventory")
         if material_id:
             key_condition = key_condition & Key("entity_key").eq(material_id)
-        scope = json.dumps([material_id, low_stock], ensure_ascii=False, separators=(",", ":"))
+        scope = json.dumps(
+            {"entity": "inventory", "filters": [material_id, low_stock]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         items, next_cursor = self._query_page(
             "inventory",
             limit,
@@ -653,7 +671,11 @@ class DynamoDbRepository:
         expression, names, values = self._data_filter(
             [(field, value) for field, value in filters if value]
         )
-        scope = json.dumps(filters, ensure_ascii=False, separators=(",", ":"))
+        scope = json.dumps(
+            {"entity": "inventory_transaction", "filters": filters},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         items, next_cursor = self._query_page(
             "inventory_transaction",
             limit,
