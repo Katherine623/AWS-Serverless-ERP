@@ -34,6 +34,7 @@ AWS Serverless ERP 物料點收管理平台，將採購單、到貨驗收、異�
 本機未設定 `ERP_ALERT_TOPIC_ARN` 時，警示會寫入 application log；部署到 AWS 後，Terraform 會建立 SNS topic，API Lambda 將 alert batch 與收料交易一起寫入 DynamoDB，`alert_worker` 再發布 JSON 警示。SNS 暫時失敗時 batch 會保留並由 EventBridge 每分鐘重試。Email 訂閱不由 Terraform 管理，避免人工確認狀態與 Terraform state 不一致。
 
 通知採 at-least-once delivery；下游若需要去重，請使用 `receipt_id + alert_type + material_id` 作為事件鍵。
+Idempotency key 預設保留 90 天，alert outbox 預設保留 30 天；DynamoDB TTL 會清理到期資料，lease 預設 300 秒。
 
 ## AWS 架構目標
 

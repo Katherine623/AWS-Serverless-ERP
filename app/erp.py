@@ -409,13 +409,19 @@ class ErpStore:
     def dispatch_pending_alerts(self) -> int:
         published = 0
         for batch_id, events in self.repository.list_pending_alert_batches():
+            lease_token = self.repository.claim_alert_batch(
+                batch_id, get_settings().alert_lease_seconds
+            )
+            if not lease_token:
+                continue
             try:
                 for event in events:
                     self.alert_publisher.publish(event)
             except Exception:
                 logger.exception("ERP alert batch %s could not be delivered", batch_id)
+                self.repository.release_alert_batch(batch_id, lease_token)
                 continue
-            self.repository.mark_alert_batch_published(batch_id)
+            self.repository.mark_alert_batch_published(batch_id, lease_token)
             published += len(events)
         return published
 

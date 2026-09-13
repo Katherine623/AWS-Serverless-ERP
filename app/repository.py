@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Protocol
+from uuid import uuid4
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -60,7 +62,13 @@ class ErpRepository(Protocol):
     def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
         ...
 
-    def mark_alert_batch_published(self, batch_id: str) -> None:
+    def claim_alert_batch(self, batch_id: str, lease_seconds: int) -> str | None:
+        ...
+
+    def release_alert_batch(self, batch_id: str, lease_token: str) -> None:
+        ...
+
+    def mark_alert_batch_published(self, batch_id: str, lease_token: str) -> None:
         ...
 
     def save_exception_resolution(
@@ -96,6 +104,11 @@ class InMemoryRepository:
         self.idempotency: dict[str, tuple[Any, str]] = {}
         self.inventory_transactions: dict[str, Any] = {}
         self.alert_batches: dict[str, list[AlertEvent]] = {}
+        self.alert_batch_status: dict[str, str] = {}
+        self.alert_batch_leases: dict[str, float] = {}
+        self.alert_batch_tokens: dict[str, str] = {}
+        self.alert_batch_attempts: dict[str, int] = {}
+        self.idempotency_expiry: dict[str, float] = {}
 
     def get_purchase_order(self, po_id: str) -> Any | None:
         return self.purchase_orders.get(po_id)
@@ -122,6 +135,11 @@ class InMemoryRepository:
         return list(self.inventory_transactions.values())
 
     def receipt_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
+        expiry = self.idempotency_expiry.get(idempotency_key)
+        if expiry is not None and expiry <= time.time():
+            self.idempotency.pop(idempotency_key, None)
+            self.idempotency_expiry.pop(idempotency_key, None)
+            return None
         return self.idempotency.get(idempotency_key)
 
     def save_receipt(
@@ -135,8 +153,9 @@ class InMemoryRepository:
         inventory_transactions: list[Any],
         alerts: list[AlertEvent],
     ) -> None:
-        if idempotency_key and idempotency_key in self.idempotency:
-            existing, existing_hash = self.idempotency[idempotency_key]
+        existing = idempotency_key and self.receipt_for_key(idempotency_key)
+        if existing:
+            existing, existing_hash = existing
             if existing_hash != request_hash:
                 raise IdempotencyConflictError("Idempotency-Key 已用於不同的收料請求")
             return
@@ -148,14 +167,55 @@ class InMemoryRepository:
         self.receipts[result.receipt_id] = result
         if alerts:
             self.alert_batches[result.receipt_id] = list(alerts)
+            self.alert_batch_status[result.receipt_id] = "pending"
+            self.alert_batch_leases[result.receipt_id] = 0
+            self.alert_batch_attempts[result.receipt_id] = 0
         if idempotency_key:
             self.idempotency[idempotency_key] = (result, request_hash)
+            self.idempotency_expiry[idempotency_key] = (
+                time.time() + get_settings().idempotency_ttl_days * 86400
+            )
 
     def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
-        return list(self.alert_batches.items())
+        now = time.time()
+        return [
+            (batch_id, self.alert_batches[batch_id])
+            for batch_id in self.alert_batches
+            if self.alert_batch_status.get(batch_id) == "pending"
+            or (
+                self.alert_batch_status.get(batch_id) == "processing"
+                and self.alert_batch_leases.get(batch_id, 0) <= now
+            )
+        ]
 
-    def mark_alert_batch_published(self, batch_id: str) -> None:
+    def claim_alert_batch(self, batch_id: str, lease_seconds: int) -> str | None:
+        now = time.time()
+        status = self.alert_batch_status.get(batch_id)
+        if status not in {"pending", "processing"}:
+            return None
+        if status == "processing" and self.alert_batch_leases.get(batch_id, 0) > now:
+            return None
+        token = uuid4().hex
+        self.alert_batch_status[batch_id] = "processing"
+        self.alert_batch_leases[batch_id] = now + lease_seconds
+        self.alert_batch_tokens[batch_id] = token
+        self.alert_batch_attempts[batch_id] = self.alert_batch_attempts.get(batch_id, 0) + 1
+        return token
+
+    def release_alert_batch(self, batch_id: str, lease_token: str) -> None:
+        if self.alert_batch_tokens.get(batch_id) != lease_token:
+            return
+        self.alert_batch_status[batch_id] = "pending"
+        self.alert_batch_leases[batch_id] = 0
+
+    def mark_alert_batch_published(self, batch_id: str, lease_token: str) -> None:
+        if self.alert_batch_tokens.get(batch_id) != lease_token:
+            return
         self.alert_batches.pop(batch_id, None)
+        self.alert_batch_status.pop(batch_id, None)
+        self.alert_batch_leases.pop(batch_id, None)
+        self.alert_batch_tokens.pop(batch_id, None)
+        self.alert_batch_attempts.pop(batch_id, None)
 
     def save_purchase_order(self, order: Any, previous_order: Any) -> None:
         if self.purchase_orders.get(order.po_id) != previous_order:
@@ -298,6 +358,9 @@ class DynamoDbRepository:
         item = response.get("Item")
         if not item:
             return None
+        if int(item.get("expires_at", 0)) <= int(time.time()):
+            self._table.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
+            return None
         receipt = self._table.get_item(
             Key={"PK": f"receipt#{item['receipt_id']}", "SK": "META"}
         ).get("Item")
@@ -351,6 +414,8 @@ class DynamoDbRepository:
                             "entity": "idempotency",
                             "receipt_id": result.receipt_id,
                             "request_hash": request_hash,
+                            "expires_at": int(time.time())
+                            + get_settings().idempotency_ttl_days * 86400,
                         },
                         "ConditionExpression": "attribute_not_exists(PK)",
                     }
@@ -397,6 +462,10 @@ class DynamoDbRepository:
                             "entity": "alert_batch",
                             "entity_key": result.receipt_id,
                             "status": "pending",
+                            "attempts": 0,
+                            "lease_until": 0,
+                            "expires_at": int(time.time())
+                            + get_settings().alert_outbox_ttl_days * 86400,
                             "data": json.dumps(
                                 [event.model_dump(mode="json") for event in alerts],
                                 ensure_ascii=False,
@@ -532,11 +601,20 @@ class DynamoDbRepository:
                 raise
 
     def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
+        now = int(time.time())
         items = self._query_items(
             "alert_batch",
-            FilterExpression="#status = :status",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={":status": "pending"},
+            FilterExpression=(
+                "#status = :pending OR "
+                "(#status = :processing AND "
+                "(attribute_not_exists(#lease_until) OR #lease_until <= :now))"
+            ),
+            ExpressionAttributeNames={"#status": "status", "#lease_until": "lease_until"},
+            ExpressionAttributeValues={
+                ":pending": "pending",
+                ":processing": "processing",
+                ":now": now,
+            },
         )
         return [
             (
@@ -546,13 +624,77 @@ class DynamoDbRepository:
             for item in items
         ]
 
-    def mark_alert_batch_published(self, batch_id: str) -> None:
-        self._table.update_item(
-            Key={"PK": f"alert_batch#{batch_id}", "SK": "META"},
-            UpdateExpression="SET #status = :status",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={":status": "published"},
-        )
+    def claim_alert_batch(self, batch_id: str, lease_seconds: int) -> str | None:
+        now = int(time.time())
+        token = uuid4().hex
+        try:
+            self._table.update_item(
+                Key={"PK": f"alert_batch#{batch_id}", "SK": "META"},
+                UpdateExpression=(
+                    "SET #status = :processing, #lease_until = :lease_until, "
+                    "#lease_token = :lease_token ADD #attempts :one"
+                ),
+                ConditionExpression=(
+                    "#status = :pending OR "
+                    "(#status = :processing AND "
+                    "(attribute_not_exists(#lease_until) OR #lease_until <= :now))"
+                ),
+                ExpressionAttributeNames={
+                    "#status": "status",
+                    "#lease_until": "lease_until",
+                    "#lease_token": "lease_token",
+                    "#attempts": "attempts",
+                },
+                ExpressionAttributeValues={
+                    ":pending": "pending",
+                    ":processing": "processing",
+                    ":now": now,
+                    ":lease_until": now + lease_seconds,
+                    ":lease_token": token,
+                    ":one": 1,
+                },
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            raise
+        return token
+
+    def release_alert_batch(self, batch_id: str, lease_token: str) -> None:
+        try:
+            self._table.update_item(
+                Key={"PK": f"alert_batch#{batch_id}", "SK": "META"},
+                UpdateExpression="SET #status = :pending REMOVE #lease_until, #lease_token",
+                ConditionExpression="#status = :processing AND #lease_token = :lease_token",
+                ExpressionAttributeNames={
+                    "#status": "status",
+                    "#lease_until": "lease_until",
+                    "#lease_token": "lease_token",
+                },
+                ExpressionAttributeValues={
+                    ":pending": "pending",
+                    ":processing": "processing",
+                    ":lease_token": lease_token,
+                },
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+
+    def mark_alert_batch_published(self, batch_id: str, lease_token: str) -> None:
+        try:
+            self._table.delete_item(
+                Key={"PK": f"alert_batch#{batch_id}", "SK": "META"},
+                ConditionExpression="#status = :processing AND #lease_token = :lease_token",
+                ExpressionAttributeNames={"#status": "status", "#lease_token": "lease_token"},
+                ExpressionAttributeValues={
+                    ":processing": "processing",
+                    ":lease_token": lease_token,
+                },
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
 
 
 def create_repository() -> ErpRepository:

@@ -74,6 +74,11 @@ resource "aws_dynamodb_table" "erp" {
     enabled = var.enable_pitr
   }
 
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
   server_side_encryption {
     enabled = true
   }
@@ -181,6 +186,9 @@ resource "aws_lambda_function" "api" {
       ERP_ENVIRONMENT           = var.erp_environment
       ERP_SEED_DEMO             = tostring(var.seed_demo)
       ERP_MCP_MUTATIONS_ENABLED = "false"
+      ERP_IDEMPOTENCY_TTL_DAYS  = tostring(var.idempotency_ttl_days)
+      ERP_ALERT_OUTBOX_TTL_DAYS = tostring(var.alert_outbox_ttl_days)
+      ERP_ALERT_LEASE_SECONDS   = tostring(var.alert_lease_seconds)
     }
   }
 }
@@ -205,6 +213,9 @@ resource "aws_lambda_function" "alert_worker" {
       ERP_ENVIRONMENT           = var.erp_environment
       ERP_SEED_DEMO             = "false"
       ERP_MCP_MUTATIONS_ENABLED = "false"
+      ERP_IDEMPOTENCY_TTL_DAYS  = tostring(var.idempotency_ttl_days)
+      ERP_ALERT_OUTBOX_TTL_DAYS = tostring(var.alert_outbox_ttl_days)
+      ERP_ALERT_LEASE_SECONDS   = tostring(var.alert_lease_seconds)
     }
   }
 }

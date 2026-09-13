@@ -36,3 +36,10 @@ def test_staging_requires_persistent_storage(monkeypatch: pytest.MonkeyPatch) ->
 
     with pytest.raises(ConfigurationError, match="DYNAMODB_TABLE_NAME"):
         Settings.from_environment()
+
+
+def test_outbox_retention_configuration_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ERP_ALERT_LEASE_SECONDS", "5")
+
+    with pytest.raises(ConfigurationError, match="between 30 and 86400"):
+        Settings.from_environment()

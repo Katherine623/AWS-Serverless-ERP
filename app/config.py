@@ -20,6 +20,20 @@ def _parse_bool(value: str | None, *, default: bool) -> bool:
     raise ConfigurationError(f"Invalid boolean configuration value: {value!r}")
 
 
+def _parse_int(value: str | None, *, default: int, minimum: int, maximum: int) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"Invalid integer configuration value: {value!r}") from exc
+    if not minimum <= parsed <= maximum:
+        raise ConfigurationError(
+            f"Configuration integer must be between {minimum} and {maximum}: {parsed}"
+        )
+    return parsed
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: str
@@ -27,6 +41,9 @@ class Settings:
     alert_topic_arn: str | None
     seed_demo: bool
     mcp_mutations_enabled: bool
+    idempotency_ttl_days: int
+    alert_outbox_ttl_days: int
+    alert_lease_seconds: int
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -52,6 +69,24 @@ class Settings:
             seed_demo=seed_demo,
             mcp_mutations_enabled=_parse_bool(
                 os.getenv("ERP_MCP_MUTATIONS_ENABLED"), default=False
+            ),
+            idempotency_ttl_days=_parse_int(
+                os.getenv("ERP_IDEMPOTENCY_TTL_DAYS"),
+                default=90,
+                minimum=1,
+                maximum=3650,
+            ),
+            alert_outbox_ttl_days=_parse_int(
+                os.getenv("ERP_ALERT_OUTBOX_TTL_DAYS"),
+                default=30,
+                minimum=1,
+                maximum=3650,
+            ),
+            alert_lease_seconds=_parse_int(
+                os.getenv("ERP_ALERT_LEASE_SECONDS"),
+                default=300,
+                minimum=30,
+                maximum=86400,
             ),
         )
 

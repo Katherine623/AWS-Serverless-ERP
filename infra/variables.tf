@@ -50,6 +50,39 @@ variable "enable_deletion_protection" {
   default     = true
 }
 
+variable "idempotency_ttl_days" {
+  description = "Retention period for idempotency keys before they may be reused."
+  type        = number
+  default     = 90
+
+  validation {
+    condition     = var.idempotency_ttl_days >= 1 && var.idempotency_ttl_days <= 3650
+    error_message = "idempotency_ttl_days must be between 1 and 3650."
+  }
+}
+
+variable "alert_outbox_ttl_days" {
+  description = "Retention period for pending alert batches."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.alert_outbox_ttl_days >= 1 && var.alert_outbox_ttl_days <= 3650
+    error_message = "alert_outbox_ttl_days must be between 1 and 3650."
+  }
+}
+
+variable "alert_lease_seconds" {
+  description = "Lease duration preventing concurrent alert worker claims."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.alert_lease_seconds >= 30 && var.alert_lease_seconds <= 86400
+    error_message = "alert_lease_seconds must be between 30 and 86400."
+  }
+}
+
 variable "api_auth_enabled" {
   description = "Require a JWT authorizer on the HTTP API."
   type        = bool

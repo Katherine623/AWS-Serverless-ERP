@@ -109,6 +109,31 @@ def test_failed_alert_delivery_keeps_pending_outbox_batch() -> None:
     assert len(repository.list_pending_alert_batches()) == 1
 
 
+def test_alert_outbox_claim_prevents_concurrent_replay() -> None:
+    repository = InMemoryRepository()
+    store = ErpStore(repository=repository, alert_publisher=FailingAlertPublisher())
+    make_order(store)
+    store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "TEST-PO-001",
+                "items": [{"material_id": "TEST-MAT-001", "received_quantity": 5}],
+            }
+        ),
+        idempotency_key="claim-alert-001",
+    )
+    batch_id = repository.list_pending_alert_batches()[0][0]
+
+    first_token = repository.claim_alert_batch(batch_id, lease_seconds=300)
+    assert first_token
+    assert repository.claim_alert_batch(batch_id, lease_seconds=300) is None
+    repository.release_alert_batch(batch_id, first_token)
+    second_token = repository.claim_alert_batch(batch_id, lease_seconds=300)
+    assert second_token
+    repository.mark_alert_batch_published(batch_id, second_token)
+    assert repository.list_pending_alert_batches() == []
+
+
 def test_unknown_purchase_order_uses_typed_not_found_error() -> None:
     store = make_store()
 
