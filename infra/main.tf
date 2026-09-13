@@ -13,8 +13,6 @@ provider "aws" {
   region = var.aws_region
 }
 
-data "aws_caller_identity" "current" {}
-
 resource "terraform_data" "auth_config" {
   input = var.api_auth_enabled
 
@@ -178,7 +176,6 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      AWS_ACCOUNT_ID            = data.aws_caller_identity.current.account_id
       ERP_ALERT_TOPIC_ARN       = aws_sns_topic.erp_alerts.arn
       ERP_DYNAMODB_TABLE_NAME   = aws_dynamodb_table.erp.name
       ERP_ENVIRONMENT           = var.erp_environment
@@ -203,7 +200,6 @@ resource "aws_lambda_function" "alert_worker" {
 
   environment {
     variables = {
-      AWS_ACCOUNT_ID            = data.aws_caller_identity.current.account_id
       ERP_ALERT_TOPIC_ARN       = aws_sns_topic.erp_alerts.arn
       ERP_DYNAMODB_TABLE_NAME   = aws_dynamodb_table.erp.name
       ERP_ENVIRONMENT           = var.erp_environment
