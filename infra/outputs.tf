@@ -40,7 +40,7 @@ output "cognito_client_id" {
 
 output "cognito_hosted_ui_url" {
   description = "Cognito Hosted UI authorization endpoint, when enabled."
-  value       = var.manage_cognito_user_pool ? "${local.managed_cognito_domain}/oauth2/authorize?client_id=${aws_cognito_user_pool_client.erp[0].id}&response_type=code&scope=openid+email+profile&redirect_uri=${urlencode("${aws_apigatewayv2_api.http.api_endpoint}/")}" : null
+  value       = var.manage_cognito_user_pool ? "${local.managed_cognito_domain}/oauth2/authorize?client_id=${aws_cognito_user_pool_client.erp[0].id}&response_type=code&scope=openid+email+profile&redirect_uri=${urlencode("${local.public_base_url}/")}" : null
 }
 
 output "frontend_url" {

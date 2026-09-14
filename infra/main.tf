@@ -22,6 +22,8 @@ locals {
   cognito_domain_prefix    = var.cognito_domain_prefix != "" ? var.cognito_domain_prefix : "${var.project_name}-${data.aws_caller_identity.current.account_id}"
   jwt_issuer               = var.manage_cognito_user_pool ? local.managed_cognito_issuer : var.cognito_issuer_url
   jwt_audience             = var.manage_cognito_user_pool ? local.managed_cognito_audience : var.cognito_audience
+  public_base_url          = var.enable_frontend_cdn ? "https://${aws_cloudfront_distribution.frontend[0].domain_name}" : aws_apigatewayv2_api.http.api_endpoint
+  upload_cors_origins      = var.enable_frontend_cdn ? [local.public_base_url] : var.cors_allowed_origins
 }
 
 resource "aws_cognito_user_pool" "erp" {
@@ -62,8 +64,8 @@ resource "aws_cognito_user_pool_client" "erp" {
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
-  callback_urls                        = ["${aws_apigatewayv2_api.http.api_endpoint}/"]
-  logout_urls                          = ["${aws_apigatewayv2_api.http.api_endpoint}/"]
+  callback_urls                        = ["${local.public_base_url}/"]
+  logout_urls                          = ["${local.public_base_url}/"]
   supported_identity_providers         = ["COGNITO"]
 }
 
@@ -273,7 +275,7 @@ resource "aws_lambda_function" "api" {
       ERP_IMPORT_BUCKET_NAME    = var.enable_excel_import ? aws_s3_bucket.imports[0].bucket : ""
       ERP_COGNITO_CLIENT_ID     = local.managed_cognito_audience
       ERP_COGNITO_DOMAIN        = local.managed_cognito_domain
-      ERP_PUBLIC_BASE_URL       = aws_apigatewayv2_api.http.api_endpoint
+      ERP_PUBLIC_BASE_URL       = local.public_base_url
     }
   }
 }
@@ -599,7 +601,7 @@ resource "aws_cloudfront_response_headers_policy" "frontend_security" {
 
   security_headers_config {
     content_security_policy {
-      content_security_policy = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'self'; frame-ancestors 'none'"
+      content_security_policy = "default-src 'self'; connect-src 'self' ${local.managed_cognito_domain}; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'self'; frame-ancestors 'none'"
       override                = true
     }
     content_type_options {
@@ -660,6 +662,9 @@ resource "aws_cloudfront_distribution" "frontend" {
         forward = "none"
       }
     }
+    min_ttl                    = 0
+    default_ttl                = 0
+    max_ttl                    = 0
     response_headers_policy_id = aws_cloudfront_response_headers_policy.frontend_security[0].id
   }
 
@@ -695,6 +700,46 @@ resource "aws_cloudfront_distribution" "frontend" {
     forwarded_values {
       query_string = true
       headers      = ["Origin", "X-Request-Id"]
+      cookies {
+        forward = "none"
+      }
+    }
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.frontend_security[0].id
+    min_ttl                    = 0
+    default_ttl                = 0
+    max_ttl                    = 0
+  }
+
+  ordered_cache_behavior {
+    path_pattern           = "/health"
+    target_origin_id       = "api-gateway"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD", "OPTIONS"]
+    compress               = true
+
+    forwarded_values {
+      query_string = false
+      cookies {
+        forward = "none"
+      }
+    }
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.frontend_security[0].id
+    min_ttl                    = 0
+    default_ttl                = 0
+    max_ttl                    = 0
+  }
+
+  ordered_cache_behavior {
+    path_pattern           = "/ready"
+    target_origin_id       = "api-gateway"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD", "OPTIONS"]
+    compress               = true
+
+    forwarded_values {
+      query_string = false
       cookies {
         forward = "none"
       }
@@ -785,13 +830,13 @@ resource "aws_s3_bucket_versioning" "imports" {
 }
 
 resource "aws_s3_bucket_cors_configuration" "imports" {
-  count  = var.enable_excel_import && length(var.cors_allowed_origins) > 0 ? 1 : 0
+  count  = var.enable_excel_import && length(local.upload_cors_origins) > 0 ? 1 : 0
   bucket = aws_s3_bucket.imports[0].id
 
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["GET", "HEAD", "PUT"]
-    allowed_origins = var.cors_allowed_origins
+    allowed_origins = local.upload_cors_origins
     expose_headers  = ["ETag"]
     max_age_seconds = 3000
   }
