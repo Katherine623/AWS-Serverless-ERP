@@ -280,9 +280,10 @@ def test_exception_can_be_closed_with_approved_difference() -> None:
     )
     response = client.post(
         "/api/purchase-orders/PO-2026-002/exception-resolution",
+        headers={"X-Demo-Actor": "test-manager", "X-Demo-Roles": "approver"},
         json={
             "action": "差異允收結案",
-            "resolved_by": "test-manager",
+            "resolved_by": "untrusted-body-actor",
             "note": "核准短缺 50 pcs 結案",
         },
     )

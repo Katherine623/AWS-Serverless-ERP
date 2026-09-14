@@ -136,7 +136,21 @@ AWS_PROFILE=erp-dev bash scripts/migrate_terraform_state.sh
 
 `.github/workflows/deploy.yml` 只在 `master` push 後部署 staging；它會先執行測試、建立 Lambda ZIP，再使用 S3 backend 執行 Terraform plan/apply。啟用前需完成一次 State 遷移，並在 GitHub `staging` Environment 建立非機密變數 `AWS_DEPLOY_ROLE_ARN`。
 
-AWS IAM Role 必須信任 GitHub OIDC provider `token.actions.githubusercontent.com`，並限制 `aud=sts.amazonaws.com` 與 `sub=repo:<OWNER>/<REPO>:ref:refs/heads/master`。Role 至少需要 Terraform 管理本專案資源的權限、讀寫 Terraform state S3 bucket，以及讀寫 DynamoDB lock table；不要把長期 AWS access key 放進 GitHub Secrets。完成後，合併到 `master` 即會觸發部署；Workflow 會在沒有 `AWS_DEPLOY_ROLE_ARN` 時直接停止，不會執行 Terraform。
+AWS IAM Role 必須信任 GitHub OIDC provider `token.actions.githubusercontent.com`，並限制 `aud=sts.amazonaws.com` 與 `sub=repo:Katherine623@199088897/AWS-Serverless-ERP@1367029885:environment:staging`。Role 至少需要 Terraform 管理本專案資源的權限、讀寫 Terraform state S3 bucket，以及讀寫 DynamoDB lock table；不要把長期 AWS access key 放進 GitHub Secrets。完成後，合併到 `master` 即會觸發部署；Workflow 會在沒有 `AWS_DEPLOY_ROLE_ARN` 時直接停止，不會執行 Terraform。
+
+### GitHub OIDC 信任設定修復
+
+此 repository 建立於 2026-07-15 之後，OIDC subject 包含 owner ID 與 repository ID。部署 job 使用 `environment: staging`，因此 subject 結尾是 `environment:staging`。舊的 `repo:Katherine623/AWS-Serverless-ERP:*` 不會匹配。
+
+部署角色 `erp-github-deploy` 的信任政策保存在 `infra/github-deploy-trust-policy.json`。在專案根目錄執行：
+
+```powershell
+aws iam update-assume-role-policy --profile erp-dev --role-name erp-github-deploy --policy-document file://infra/github-deploy-trust-policy.json
+```
+
+GitHub staging Environment 的 `AWS_DEPLOY_ROLE_ARN` 應為 `arn:aws:iam::586106643022:role/erp-github-deploy`，並將 Environment deployment branches 限制為 `master`。信任政策修復後可直接重新執行失敗的 workflow。
+
+參考：https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws
 
 清理舊的 `DEMO-*` DynamoDB 資料時，先預覽：
 

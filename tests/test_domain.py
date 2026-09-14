@@ -89,7 +89,14 @@ def test_over_receipt_can_only_be_closed_as_approved_difference() -> None:
     inventory = next(item for item in store.list_inventory() if item.material_id == "TEST-MAT-001")
     assert inventory.quantity == 12
     assert inventory.quarantine_quantity == 0
-    assert store.list_inventory_transactions()[0].transaction_type == "差異允收"
+    approved_transactions = [
+        transaction
+        for transaction in store.list_inventory_transactions()
+        if transaction.transaction_type == "差異允收"
+    ]
+    assert len(approved_transactions) == 1
+    assert approved_transactions[0].quantity_change == 2
+    assert approved_transactions[0].performed_by == "manager"
 
 
 def test_failed_alert_delivery_keeps_pending_outbox_batch() -> None:
