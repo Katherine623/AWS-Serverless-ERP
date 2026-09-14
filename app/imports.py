@@ -18,6 +18,7 @@ def create_excel_upload_url(file_name: str) -> tuple[str, str, int]:
     safe_name = SAFE_FILE_NAME.sub("-", file_name).strip(".-") or "import.xlsx"
     if not safe_name.lower().endswith(".xlsx"):
         raise ValueError("只允許上傳 .xlsx 檔案")
+    safe_name = f"{safe_name[:-5]}.xlsx"
     key = f"incoming/{uuid4().hex}-{safe_name}"
     expires_in = 900
     url = boto3.client("s3").generate_presigned_url(

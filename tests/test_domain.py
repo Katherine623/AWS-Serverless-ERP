@@ -56,6 +56,7 @@ def test_over_receipt_is_recorded_as_exception() -> None:
 
     assert result.status == "待處理異常"
     assert result.exceptions == ["Test material 超收 2 pcs"]
+    assert store.repository.get_purchase_order("TEST-PO-001").exception_reasons == result.exceptions
     inventory = next(item for item in store.list_inventory() if item.material_id == "TEST-MAT-001")
     assert inventory.quantity == 10
     assert inventory.quarantine_quantity == 2

@@ -1,0 +1,11 @@
+aws_region                = "ap-northeast-1"
+erp_environment           = "staging"
+seed_demo                 = false
+api_auth_enabled          = true
+manage_cognito_user_pool  = true
+cognito_user_pool_name    = "erp-receiving-platform-users"
+enable_excel_import       = true
+enable_frontend_cdn       = false
+
+# Replace with the actual API or frontend origin before enabling browser CORS.
+cors_allowed_origins = ["https://YOUR_API_ID.execute-api.ap-northeast-1.amazonaws.com"]

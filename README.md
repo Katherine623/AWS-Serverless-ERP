@@ -1,6 +1,6 @@
 # AWS Serverless ERP Receiving Platform
 
-AWS Serverless ERP 物料點收管理平台，將採購單、到貨驗收、異常判斷與庫存異動串成可追蹤流程。這個專案以履歷展示為目標，先提供可執行的本機 MVP，再逐步接上 AWS 託管服務；同時提供 approval-gated MCP 工具，讓 AI 可以查詢 ERP，但不能預設直接改資料。
+AWS Serverless ERP 物料點收管理平台，將採購單、到貨驗收、異常判斷與庫存異動串成可追蹤流程。正式 staging 部署使用 API Gateway JWT、Cognito、Lambda、DynamoDB、SNS 與 EventBridge；同時提供 approval-gated MCP 工具，讓 AI 可以查詢 ERP，但不能預設直接改資料。
 
 ## 核心流程
 
@@ -8,7 +8,7 @@ AWS Serverless ERP 物料點收管理平台，將採購單、到貨驗收、異�
 採購單 -> 到貨驗收 -> 短缺／超收判斷 -> 庫存更新 -> AWS SNS 警示 -> Dashboard 查詢
 ```
 
-目前 Demo 支援：
+目前功能支援：
 
 - 採購單與供應商資料
 - 待驗收、已完成、有異常狀態
@@ -61,13 +61,14 @@ python -m pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 ```
 
-開啟 <http://127.0.0.1:8000>，API 文件位於 <http://127.0.0.1:8000/docs>。新版作業台已直接整合 PO 篩選／cursor 分頁、低庫存與隔離庫存 KPI、收料、異常處置、庫存調整、Excel 上傳與 JWT token 設定；不需要切換到 Swagger 才能操作。
+開啟 <http://127.0.0.1:8000>，API 文件位於 <http://127.0.0.1:8000/docs>。新版作業台已直接整合 PO 篩選／cursor 分頁、低庫存與隔離庫存 KPI、收料、異常處置、庫存調整、Excel 上傳與 Cognito Hosted UI 登入；不需要切換到 Swagger 才能操作。local/test 沒有 Hosted UI 時仍可用進階手動 JWT 欄位測試。
 
 ## API
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/health` / `/ready` | Liveness / DynamoDB readiness |
+| GET | `/auth/config` | Cognito Hosted UI OAuth 設定（公開，只回傳 client ID 與端點） |
 | GET | `/api/dashboard` | ERP KPI 摘要 |
 | GET | `/api/purchase-orders` | 查詢採購單 |
 | GET | `/api/v2/purchase-orders?limit=50&cursor=...&status=待驗收&supplier_name=...` | 分頁、狀態與供應商篩選 |
@@ -95,7 +96,7 @@ python -m app.mcp_server
 
 目前提供 Dashboard、採購單、庫存與庫存異動查詢；建立 PO、收料與異常處置都要求 `approved=true`，且還必須設定 `ERP_MCP_MUTATIONS_ENABLED=true` 才會執行變更。預設為唯讀。
 
-HTTP API 在 `local` / `test` 使用 demo actor；`staging` / `production` 必須由 API Gateway JWT 提供 `sub` 與 `roles` / `cognito:groups`。建立 PO 需要 `purchaser`、收料需要 `warehouse`、異常結案需要 `approver`；`admin` 可執行全部操作。操作者身份由 JWT subject 記錄，不接受前端自行指定。Terraform 設定 `manage_cognito_user_pool=true` 時，會一併建立 user pool、app client 與四個 ERP role groups；也可以改用既有 Cognito issuer/audience。
+HTTP API 在 `local` / `test` 使用 demo actor；`staging` / `production` 必須由 API Gateway JWT 提供 `sub` 與 `roles` / `cognito:groups`。查詢 ERP 資料也需要至少一個 ERP role；建立 PO 需要 `purchaser`、收料需要 `warehouse`、異常結案需要 `approver`；`admin` 可執行全部操作。操作者身份由 JWT subject 記錄，不接受前端自行指定。Terraform 設定 `manage_cognito_user_pool=true` 時，會一併建立只允許管理員建立使用者的 user pool、app client、Hosted UI domain 與四個 ERP role groups；作業台使用 OAuth Authorization Code + PKCE，並以 refresh token 自動更新 ID token。也可以改用既有 Cognito issuer/audience，但此時 Hosted UI 需由外部 IdP 自行提供。
 
 ## 測試與部署
 
@@ -111,17 +112,46 @@ Lambda ZIP、API Gateway、IAM、DynamoDB、SNS 與 alert worker 的 Terraform �
 bash scripts/build_lambda.sh
 ```
 
+第一次部署可先複製 `infra/terraform.tfvars.example` 為 `infra/terraform.tfvars`，再依 API 網域調整 `cors_allowed_origins`；`terraform.tfvars` 不會被 Git 追蹤。
+
 再執行：
 
 ```bash
 terraform -chdir=infra apply
 ```
 
-正式環境建議確認 `erp_environment=production`、`seed_demo=false`，並提供 Cognito issuer/audience 後設定 `api_auth_enabled=true`。此部署方式不需要 Docker 或 ECR；SNS Topic 會保留，警示可透過 CloudWatch Logs 查看。
+正式環境建議確認 `erp_environment=production`、`seed_demo=false`、`manage_cognito_user_pool=true` 與 `api_auth_enabled=true`。Terraform 會輸出 `cognito_hosted_ui_url`；第一次登入只需完成 Cognito Hosted UI，之後作業台會自動刷新 token。此部署方式不需要 Docker 或 ECR；SNS Topic 會保留，警示可透過 CloudWatch Logs 查看。
 
 若由不同網域的前端呼叫 API，請明確設定 `cors_allowed_origins = ["https://erp.example.com"]`；留空時不會啟用 API Gateway CORS。不要在正式環境使用 `*`。HTTP API stage 預設限制 50 req/s、burst 100，可依流量調整 `api_rate_limit` 與 `api_burst_limit`。
 
-團隊或正式環境不要使用本機 Terraform state；請先建立受加密與版本控管保護的 S3 state bucket，再將 `infra/backend.tf.example` 複製成 `infra/backend.tf` 並填入實際 bucket。
+Terraform state 已設定為 S3 backend，並使用 DynamoDB lock 防止同時部署。第一次切換請執行：
+
+```bash
+AWS_PROFILE=erp-dev bash scripts/migrate_terraform_state.sh
+```
+
+腳本會建立（若不存在）啟用私有存取、SSE 加密與版本控管的 S3 state bucket，以及按量計費的 DynamoDB lock table，然後將現有 `infra/terraform.tfstate` 遷移到 S3。若 AWS 帳戶不同，請同時修改 `infra/backend.tf` 的 bucket／table 名稱，並用 `ERP_TF_STATE_BUCKET` 與 `ERP_TF_LOCK_TABLE` 傳給遷移腳本。
+
+### GitHub Actions 自動部署
+
+`.github/workflows/deploy.yml` 只在 `master` push 後部署 staging；它會先執行測試、建立 Lambda ZIP，再使用 S3 backend 執行 Terraform plan/apply。啟用前需完成一次 State 遷移，並在 GitHub `staging` Environment 建立非機密變數 `AWS_DEPLOY_ROLE_ARN`。
+
+AWS IAM Role 必須信任 GitHub OIDC provider `token.actions.githubusercontent.com`，並限制 `aud=sts.amazonaws.com` 與 `sub=repo:<OWNER>/<REPO>:ref:refs/heads/master`。Role 至少需要 Terraform 管理本專案資源的權限、讀寫 Terraform state S3 bucket，以及讀寫 DynamoDB lock table；不要把長期 AWS access key 放進 GitHub Secrets。完成後，合併到 `master` 即會觸發部署；Workflow 會在沒有 `AWS_DEPLOY_ROLE_ARN` 時直接停止，不會執行 Terraform。
+
+清理舊的 `DEMO-*` DynamoDB 資料時，先預覽：
+
+```bash
+AWS_PROFILE=erp-dev .venv/bin/python scripts/cleanup_demo_data.py
+```
+
+確認列出的 `PK/SK` 全部都是舊示範資料後，才執行刪除：
+
+```bash
+AWS_PROFILE=erp-dev .venv/bin/python scripts/cleanup_demo_data.py \
+  --apply --confirm DELETE-DEMO-DATA
+```
+
+工具會先將命中的資料備份到 `/tmp/erp-demo-records-*.json`，只刪除與 `DEMO-*` 採購單或料號直接相關的資料，不會刪除正式 `PO-*` 或 `MAT-*` 資料。
 
 Excel 匯入工作表第一列需包含 `po_id`、`supplier_name`、`expected_date`、`material_id`、`material_name`、`ordered_quantity`；`unit` 可選，`.xlsx` 上傳到 import bucket 後會經 SQS 交給 worker，連續失敗的訊息會進 DLQ。
 

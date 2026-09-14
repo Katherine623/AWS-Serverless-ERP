@@ -13,9 +13,13 @@ provider "aws" {
   region = var.aws_region
 }
 
+data "aws_caller_identity" "current" {}
+
 locals {
   managed_cognito_issuer   = var.manage_cognito_user_pool ? "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.erp[0].id}" : ""
   managed_cognito_audience = var.manage_cognito_user_pool ? aws_cognito_user_pool_client.erp[0].id : ""
+  managed_cognito_domain   = var.manage_cognito_user_pool ? "https://${aws_cognito_user_pool_domain.erp[0].domain}.auth.${var.aws_region}.amazoncognito.com" : ""
+  cognito_domain_prefix    = var.cognito_domain_prefix != "" ? var.cognito_domain_prefix : "${var.project_name}-${data.aws_caller_identity.current.account_id}"
   jwt_issuer               = var.manage_cognito_user_pool ? local.managed_cognito_issuer : var.cognito_issuer_url
   jwt_audience             = var.manage_cognito_user_pool ? local.managed_cognito_audience : var.cognito_audience
 }
@@ -36,7 +40,12 @@ resource "aws_cognito_user_pool" "erp" {
   }
 
   auto_verified_attributes = ["email"]
-  tags                     = var.tags
+
+  admin_create_user_config {
+    allow_admin_create_user_only = true
+  }
+
+  tags = var.tags
 }
 
 resource "aws_cognito_user_pool_client" "erp" {
@@ -45,7 +54,23 @@ resource "aws_cognito_user_pool_client" "erp" {
   user_pool_id                  = aws_cognito_user_pool.erp[0].id
   generate_secret               = false
   prevent_user_existence_errors = "ENABLED"
-  explicit_auth_flows           = ["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
+  explicit_auth_flows = [
+    "ALLOW_REFRESH_TOKEN_AUTH",
+    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_USER_PASSWORD_AUTH",
+  ]
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email", "profile"]
+  callback_urls                        = ["${aws_apigatewayv2_api.http.api_endpoint}/"]
+  logout_urls                          = ["${aws_apigatewayv2_api.http.api_endpoint}/"]
+  supported_identity_providers         = ["COGNITO"]
+}
+
+resource "aws_cognito_user_pool_domain" "erp" {
+  count        = var.manage_cognito_user_pool ? 1 : 0
+  domain       = local.cognito_domain_prefix
+  user_pool_id = aws_cognito_user_pool.erp[0].id
 }
 
 resource "aws_cognito_user_group" "erp_roles" {
@@ -67,8 +92,8 @@ resource "terraform_data" "auth_config" {
     }
 
     precondition {
-      condition     = var.erp_environment != "production" || var.api_auth_enabled
-      error_message = "api_auth_enabled must be true in production."
+      condition     = contains(["local", "test"], var.erp_environment) || var.api_auth_enabled
+      error_message = "api_auth_enabled must be true in staging and production."
     }
 
     precondition {
@@ -246,6 +271,9 @@ resource "aws_lambda_function" "api" {
       ERP_ALERT_OUTBOX_TTL_DAYS = tostring(var.alert_outbox_ttl_days)
       ERP_ALERT_LEASE_SECONDS   = tostring(var.alert_lease_seconds)
       ERP_IMPORT_BUCKET_NAME    = var.enable_excel_import ? aws_s3_bucket.imports[0].bucket : ""
+      ERP_COGNITO_CLIENT_ID     = local.managed_cognito_audience
+      ERP_COGNITO_DOMAIN        = local.managed_cognito_domain
+      ERP_PUBLIC_BASE_URL       = aws_apigatewayv2_api.http.api_endpoint
     }
   }
 }
@@ -389,6 +417,55 @@ resource "aws_apigatewayv2_route" "default" {
   depends_on         = [terraform_data.auth_config]
 }
 
+resource "aws_apigatewayv2_route" "index" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "frontend_script" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /app.js"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "purchase_order_template" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /purchase-order-template.xlsx"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "favicon" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /favicon.ico"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "health" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /health"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "ready" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /ready"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "auth_config" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /auth/config"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"
@@ -487,6 +564,24 @@ resource "aws_s3_object" "frontend_index" {
   source       = "${path.module}/../web/index.html"
   etag         = filemd5("${path.module}/../web/index.html")
   content_type = "text/html; charset=utf-8"
+}
+
+resource "aws_s3_object" "frontend_app" {
+  count        = var.enable_frontend_cdn ? 1 : 0
+  bucket       = aws_s3_bucket.frontend[0].id
+  key          = "app.js"
+  source       = "${path.module}/../web/app.js"
+  etag         = filemd5("${path.module}/../web/app.js")
+  content_type = "text/javascript; charset=utf-8"
+}
+
+resource "aws_s3_object" "purchase_order_template" {
+  count        = var.enable_frontend_cdn ? 1 : 0
+  bucket       = aws_s3_bucket.frontend[0].id
+  key          = "purchase-order-template.xlsx"
+  source       = "${path.module}/../web/purchase-order-template.xlsx"
+  etag         = filemd5("${path.module}/../web/purchase-order-template.xlsx")
+  content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 }
 
 resource "aws_cloudfront_origin_access_control" "frontend" {
@@ -589,6 +684,27 @@ resource "aws_cloudfront_distribution" "frontend" {
     max_ttl                    = 0
   }
 
+  ordered_cache_behavior {
+    path_pattern           = "/auth/*"
+    target_origin_id       = "api-gateway"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD", "OPTIONS"]
+    compress               = true
+
+    forwarded_values {
+      query_string = true
+      headers      = ["Origin", "X-Request-Id"]
+      cookies {
+        forward = "none"
+      }
+    }
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.frontend_security[0].id
+    min_ttl                    = 0
+    default_ttl                = 0
+    max_ttl                    = 0
+  }
+
   restrictions {
     geo_restriction {
       restriction_type = "none"
@@ -668,6 +784,19 @@ resource "aws_s3_bucket_versioning" "imports" {
   }
 }
 
+resource "aws_s3_bucket_cors_configuration" "imports" {
+  count  = var.enable_excel_import && length(var.cors_allowed_origins) > 0 ? 1 : 0
+  bucket = aws_s3_bucket.imports[0].id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["GET", "HEAD", "PUT"]
+    allowed_origins = var.cors_allowed_origins
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3000
+  }
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "imports" {
   count  = var.enable_excel_import ? 1 : 0
   bucket = aws_s3_bucket.imports[0].id
@@ -699,9 +828,12 @@ resource "aws_sqs_queue" "imports_dlq" {
 }
 
 resource "aws_sqs_queue" "imports" {
-  count                      = var.enable_excel_import ? 1 : 0
-  name                       = "${var.project_name}-imports"
-  visibility_timeout_seconds = 300
+  count = var.enable_excel_import ? 1 : 0
+  name  = "${var.project_name}-imports"
+  # AWS recommends a visibility timeout of at least six times the Lambda
+  # timeout plus the maximum batching window to avoid duplicate deliveries.
+  # import_worker timeout = 240s and batching window = 5s, so use 1500s.
+  visibility_timeout_seconds = 1500
   message_retention_seconds  = 345600
   receive_wait_time_seconds  = 20
   sqs_managed_sse_enabled    = true

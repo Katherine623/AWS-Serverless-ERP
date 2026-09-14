@@ -7,10 +7,11 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from mangum import Mangum
 
-from app.auth import Actor, get_current_actor, require_roles
+from app.auth import Actor, require_roles
+from app.config import get_settings
 from app.erp import (
     CreatePurchaseOrderRequest,
     DashboardSummary,
@@ -43,6 +44,7 @@ app = FastAPI(
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 logger = logging.getLogger(__name__)
+ERP_READ_ROLES = ("admin", "approver", "purchaser", "warehouse")
 
 
 @app.middleware("http")
@@ -74,7 +76,31 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(WEB_ROOT / "index.html")
+    return FileResponse(WEB_ROOT / "index.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/app.js", include_in_schema=False)
+def frontend_script() -> FileResponse:
+    return FileResponse(
+        WEB_ROOT / "app.js",
+        media_type="text/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/purchase-order-template.xlsx", include_in_schema=False)
+def purchase_order_template() -> FileResponse:
+    return FileResponse(
+        WEB_ROOT / "purchase-order-template.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="purchase-order-template.xlsx",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    return Response(status_code=204)
 
 
 @app.get("/health")
@@ -92,21 +118,42 @@ def readiness() -> dict[str, str]:
     return {"status": "ready", "service": "erp-receiving-platform"}
 
 
+@app.get("/auth/config")
+def auth_config(request: Request) -> dict[str, str | bool]:
+    settings = get_settings()
+    public_base_url = (settings.public_base_url or str(request.base_url)).rstrip("/")
+    if not settings.cognito_client_id or not settings.cognito_domain:
+        return {"enabled": False, "redirect_uri": f"{public_base_url}/"}
+    domain = settings.cognito_domain.rstrip("/")
+    return {
+        "enabled": True,
+        "client_id": settings.cognito_client_id,
+        "authorize_url": f"{domain}/oauth2/authorize",
+        "token_url": f"{domain}/oauth2/token",
+        "logout_url": f"{domain}/logout",
+        "redirect_uri": f"{public_base_url}/",
+    }
+
+
 @app.get("/api/dashboard", response_model=DashboardSummary)
-def dashboard(actor: Annotated[Actor, Depends(get_current_actor)]) -> DashboardSummary:
+def dashboard(
+    actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
+) -> DashboardSummary:
     del actor
     return store.dashboard()
 
 
 @app.get("/api/purchase-orders", response_model=list[PurchaseOrder])
-def purchase_orders(actor: Annotated[Actor, Depends(get_current_actor)]) -> list[PurchaseOrder]:
+def purchase_orders(
+    actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
+) -> list[PurchaseOrder]:
     del actor
     return store.list_purchase_orders()
 
 
 @app.get("/api/v2/purchase-orders", response_model=PurchaseOrderPage)
 def purchase_orders_page(
-    actor: Annotated[Actor, Depends(get_current_actor)],
+    actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, max_length=1024),
     status: str | None = Query(
@@ -217,14 +264,16 @@ def resolve_purchase_order_exception(
 
 
 @app.get("/api/inventory", response_model=list[InventoryItem])
-def inventory(actor: Annotated[Actor, Depends(get_current_actor)]) -> list[InventoryItem]:
+def inventory(
+    actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
+) -> list[InventoryItem]:
     del actor
     return store.list_inventory()
 
 
 @app.get("/api/v2/inventory", response_model=InventoryPage)
 def inventory_page(
-    actor: Annotated[Actor, Depends(get_current_actor)],
+    actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, max_length=1024),
     material_id: str | None = Query(default=None, max_length=80),
@@ -244,7 +293,7 @@ def inventory_page(
 
 @app.get("/api/inventory-transactions", response_model=list[InventoryTransaction])
 def inventory_transactions(
-    actor: Annotated[Actor, Depends(get_current_actor)],
+    actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
 ) -> list[InventoryTransaction]:
     del actor
     return store.list_inventory_transactions()
@@ -252,7 +301,7 @@ def inventory_transactions(
 
 @app.get("/api/v2/inventory-transactions", response_model=InventoryTransactionPage)
 def inventory_transactions_page(
-    actor: Annotated[Actor, Depends(get_current_actor)],
+    actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, max_length=1024),
     material_id: str | None = Query(default=None, max_length=80),

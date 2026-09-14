@@ -39,6 +39,9 @@ class Settings:
     environment: str
     dynamodb_table_name: str | None
     alert_topic_arn: str | None
+    cognito_client_id: str | None
+    cognito_domain: str | None
+    public_base_url: str | None
     seed_demo: bool
     mcp_mutations_enabled: bool
     idempotency_ttl_days: int
@@ -67,6 +70,9 @@ class Settings:
             environment=environment,
             dynamodb_table_name=table_name,
             alert_topic_arn=os.getenv("ERP_ALERT_TOPIC_ARN") or None,
+            cognito_client_id=os.getenv("ERP_COGNITO_CLIENT_ID") or None,
+            cognito_domain=os.getenv("ERP_COGNITO_DOMAIN") or None,
+            public_base_url=os.getenv("ERP_PUBLIC_BASE_URL") or None,
             seed_demo=seed_demo,
             mcp_mutations_enabled=_parse_bool(
                 os.getenv("ERP_MCP_MUTATIONS_ENABLED"), default=False

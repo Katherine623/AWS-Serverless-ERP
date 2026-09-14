@@ -1,7 +1,7 @@
 import pytest
 
 from app.erp import ErpStore, InventoryTransaction
-from app.repository import InMemoryRepository, _encode_cursor
+from app.repository import DynamoDbRepository, InMemoryRepository, _encode_cursor
 
 
 def test_in_memory_pages_return_opaque_cursor() -> None:
@@ -25,6 +25,29 @@ def test_invalid_page_cursor_is_rejected() -> None:
         repository.list_inventory_page(10, "not-a-cursor")
     with pytest.raises(ValueError, match="cursor"):
         repository.list_inventory_page(10, _encode_cursor({"offset": None}))
+
+
+def test_dynamo_snapshot_preserves_legacy_model_data() -> None:
+    raw_data = (
+        '{"material_id":"LEGACY-MAT","material_name":"Legacy","quantity":10,'
+        '"updated_at":"2026-09-13T00:00:00Z"}'
+    )
+    item = DynamoDbRepository._model({"data": raw_data}, "InventoryItem")
+
+    assert DynamoDbRepository._snapshot(item) == raw_data
+
+
+def test_dynamo_filters_match_compact_and_spaced_json_records() -> None:
+    expression, _, values = DynamoDbRepository._data_filter(
+        [("status", "待驗收")]
+    )
+    stored_records = [
+        '{"status":"待驗收"}',
+        '{"status": "待驗收"}',
+    ]
+
+    assert "OR" in expression
+    assert any(needle in record for needle in values.values() for record in stored_records)
 
 
 def test_page_filters_are_applied_and_cursor_is_bound_to_filter() -> None:

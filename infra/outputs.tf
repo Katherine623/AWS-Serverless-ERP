@@ -38,6 +38,11 @@ output "cognito_client_id" {
   value       = var.manage_cognito_user_pool ? aws_cognito_user_pool_client.erp[0].id : null
 }
 
+output "cognito_hosted_ui_url" {
+  description = "Cognito Hosted UI authorization endpoint, when enabled."
+  value       = var.manage_cognito_user_pool ? "${local.managed_cognito_domain}/oauth2/authorize?client_id=${aws_cognito_user_pool_client.erp[0].id}&response_type=code&scope=openid+email+profile&redirect_uri=${urlencode("${aws_apigatewayv2_api.http.api_endpoint}/")}" : null
+}
+
 output "frontend_url" {
   description = "CloudFront frontend URL, when frontend CDN is enabled."
   value       = var.enable_frontend_cdn ? "https://${aws_cloudfront_distribution.frontend[0].domain_name}" : null

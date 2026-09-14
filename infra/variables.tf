@@ -113,6 +113,17 @@ variable "cognito_user_pool_name" {
   default     = ""
 }
 
+variable "cognito_domain_prefix" {
+  description = "Optional globally unique Cognito Hosted UI domain prefix."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.cognito_domain_prefix == "" || can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", var.cognito_domain_prefix))
+    error_message = "cognito_domain_prefix must contain lowercase letters, numbers and hyphens only."
+  }
+}
+
 variable "cors_allowed_origins" {
   description = "Explicit browser origins allowed to call the HTTP API."
   type        = list(string)

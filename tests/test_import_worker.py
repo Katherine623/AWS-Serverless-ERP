@@ -66,3 +66,6 @@ def test_excel_upload_url_is_scoped_to_xlsx_object(monkeypatch) -> None:
     assert key.endswith("warehouse-stock.xlsx")
     assert url == "https://upload.example.test"
     assert expires == 900
+
+    uppercase_key, _, _ = imports.create_excel_upload_url("warehouse stock.XLSX")
+    assert uppercase_key.endswith("warehouse-stock.xlsx")

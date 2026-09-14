@@ -450,7 +450,17 @@ class DynamoDbRepository:
         from app import erp
 
         model = getattr(erp, model_name)
-        return model.model_validate(json.loads(item["data"]))
+        value = model.model_validate(json.loads(item["data"]))
+        if hasattr(value, "_stored_data"):
+            value._stored_data = item.get("data")
+        return value
+
+    @staticmethod
+    def _snapshot(value: Any) -> str:
+        stored_data = getattr(value, "_stored_data", None)
+        if isinstance(stored_data, str):
+            return stored_data
+        return json.dumps(value.model_dump(mode="json"), ensure_ascii=False)
 
     def _query_items(self, entity: str, **kwargs: Any) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -525,8 +535,10 @@ class DynamoDbRepository:
         return matched, next_cursor
 
     @staticmethod
-    def _json_field_needle(field: str, value: str) -> str:
-        return f'"{field}":{json.dumps(value, ensure_ascii=False, separators=(",", ":"))}'
+    def _json_field_needles(field: str, value: str) -> tuple[str, str]:
+        encoded_value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        prefix = f'"{field}":'
+        return prefix + encoded_value, prefix + " " + encoded_value
 
     @classmethod
     def _data_filter(
@@ -539,9 +551,14 @@ class DynamoDbRepository:
         names = {"#data": "data"}
         values: dict[str, Any] = {}
         for index, (field, value) in enumerate(filters):
-            token = f":filter_{index}"
-            expressions.append(f"contains(#data, {token})")
-            values[token] = cls._json_field_needle(field, value)
+            compact_token = f":filter_{index}_compact"
+            spaced_token = f":filter_{index}_spaced"
+            expressions.append(
+                f"(contains(#data, {compact_token}) OR contains(#data, {spaced_token}))"
+            )
+            compact_needle, spaced_needle = cls._json_field_needles(field, value)
+            values[compact_token] = compact_needle
+            values[spaced_token] = spaced_needle
         return " AND ".join(expressions), names, values
 
     def _query_count(self, entity: str, **kwargs: Any) -> int:
@@ -565,7 +582,10 @@ class DynamoDbRepository:
         return total
 
     def get_purchase_order(self, po_id: str) -> Any | None:
-        response = self._table.get_item(Key={"PK": f"purchase_order#{po_id}", "SK": "META"})
+        response = self._table.get_item(
+            Key={"PK": f"purchase_order#{po_id}", "SK": "META"},
+            ConsistentRead=True,
+        )
         item = response.get("Item")
         return self._model(item, "PurchaseOrder") if item else None
 
@@ -659,7 +679,10 @@ class DynamoDbRepository:
         return [self._model(item, "InventoryItem") for item in items], next_cursor
 
     def get_inventory(self, material_id: str) -> Any | None:
-        response = self._table.get_item(Key={"PK": f"inventory#{material_id}", "SK": "META"})
+        response = self._table.get_item(
+            Key={"PK": f"inventory#{material_id}", "SK": "META"},
+            ConsistentRead=True,
+        )
         item = response.get("Item")
         return self._model(item, "InventoryItem") if item else None
 
@@ -696,7 +719,10 @@ class DynamoDbRepository:
         return [self._model(item, "InventoryTransaction") for item in items], next_cursor
 
     def receipt_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
-        response = self._table.get_item(Key={"PK": f"idempotency#{idempotency_key}", "SK": "META"})
+        response = self._table.get_item(
+            Key={"PK": f"idempotency#{idempotency_key}", "SK": "META"},
+            ConsistentRead=True,
+        )
         item = response.get("Item")
         if not item:
             return None
@@ -705,7 +731,8 @@ class DynamoDbRepository:
             self._table.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
             return None
         receipt = self._table.get_item(
-            Key={"PK": f"receipt#{item['receipt_id']}", "SK": "META"}
+            Key={"PK": f"receipt#{item['receipt_id']}", "SK": "META"},
+            ConsistentRead=True,
         ).get("Item")
         if not receipt:
             return None
@@ -713,7 +740,8 @@ class DynamoDbRepository:
 
     def mutation_for_key(self, idempotency_key: str) -> tuple[Any, str] | None:
         item = self._table.get_item(
-            Key={"PK": f"mutation#{idempotency_key}", "SK": "META"}
+            Key={"PK": f"mutation#{idempotency_key}", "SK": "META"},
+            ConsistentRead=True,
         ).get("Item")
         if not item:
             return None
@@ -751,9 +779,7 @@ class DynamoDbRepository:
                     "ConditionExpression": "#data = :previous",
                     "ExpressionAttributeNames": {"#data": "data"},
                     "ExpressionAttributeValues": {
-                        ":previous": json.dumps(
-                            previous_order.model_dump(mode="json"), ensure_ascii=False
-                        )
+                        ":previous": self._snapshot(previous_order)
                     },
                 }
             },
@@ -787,9 +813,7 @@ class DynamoDbRepository:
                 action["Put"]["ConditionExpression"] = "#data = :previous"
                 action["Put"]["ExpressionAttributeNames"] = {"#data": "data"}
                 action["Put"]["ExpressionAttributeValues"] = {
-                    ":previous": json.dumps(
-                        previous.model_dump(mode="json"), ensure_ascii=False
-                    )
+                    ":previous": self._snapshot(previous)
                 }
             else:
                 action["Put"]["ConditionExpression"] = "attribute_not_exists(PK)"
@@ -870,9 +894,7 @@ class DynamoDbRepository:
                     "ConditionExpression": "#data = :previous",
                     "ExpressionAttributeNames": {"#data": "data"},
                     "ExpressionAttributeValues": {
-                        ":previous": json.dumps(
-                            previous_inventory.model_dump(mode="json"), ensure_ascii=False
-                        )
+                        ":previous": self._snapshot(previous_inventory)
                     },
                 }
             },
@@ -925,9 +947,7 @@ class DynamoDbRepository:
                 ConditionExpression="#data = :previous",
                 ExpressionAttributeNames={"#data": "data"},
                 ExpressionAttributeValues={
-                    ":previous": json.dumps(
-                        previous_order.model_dump(mode="json"), ensure_ascii=False
-                    )
+                    ":previous": self._snapshot(previous_order)
                 },
             )
         except ClientError as exc:
@@ -952,9 +972,7 @@ class DynamoDbRepository:
                     "ConditionExpression": "#data = :previous",
                     "ExpressionAttributeNames": {"#data": "data"},
                     "ExpressionAttributeValues": {
-                        ":previous": json.dumps(
-                            previous_order.model_dump(mode="json"), ensure_ascii=False
-                        )
+                        ":previous": self._snapshot(previous_order)
                     },
                 }
             }
@@ -970,9 +988,7 @@ class DynamoDbRepository:
                         "ConditionExpression": "#data = :previous",
                         "ExpressionAttributeNames": {"#data": "data"},
                         "ExpressionAttributeValues": {
-                            ":previous": json.dumps(
-                                previous.model_dump(mode="json"), ensure_ascii=False
-                            )
+                            ":previous": self._snapshot(previous)
                         },
                     }
                 }

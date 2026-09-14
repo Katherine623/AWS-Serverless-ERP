@@ -8,7 +8,7 @@ from enum import StrEnum
 from threading import Lock
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from app.alerts import AlertEvent, AlertPublisher, create_alert_publisher
 from app.config import get_settings
@@ -46,12 +46,15 @@ class CreatePurchaseOrderItem(BaseModel):
 
 
 class PurchaseOrder(BaseModel):
+    _stored_data: str | None = PrivateAttr(default=None)
+
     po_id: str
     supplier_name: str
     expected_date: date
     status: str
     items: list[PurchaseOrderItem]
     created_at: datetime
+    exception_reasons: list[str] = Field(default_factory=list)
     exception_action: str | None = None
     exception_resolved_by: str | None = None
     exception_note: str | None = None
@@ -173,6 +176,8 @@ class InventoryTransaction(BaseModel):
 
 
 class InventoryItem(BaseModel):
+    _stored_data: str | None = PrivateAttr(default=None)
+
     material_id: str = Field(min_length=1, max_length=80)
     material_name: str = Field(min_length=1, max_length=160)
     quantity: int = Field(ge=0)
@@ -526,6 +531,7 @@ class ErpStore:
                 if exceptions
                 else PurchaseOrderStatus.COMPLETED.value
             )
+            order.exception_reasons = exceptions
             order.status = status
             result = ReceiptResult(
                 receipt_id=f"RCV-{uuid4().hex[:8].upper()}",
