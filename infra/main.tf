@@ -249,6 +249,20 @@ resource "aws_iam_role_policy" "lambda_data" {
   })
 }
 
+resource "aws_iam_role_policy" "ai_model" {
+  count = var.ai_model_id != "" ? 1 : 0
+  name  = "${var.project_name}-ai-model"
+  role  = aws_iam_role.lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["bedrock:InvokeModel"]
+      Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.ai_model_id}"
+    }]
+  })
+}
+
 resource "aws_lambda_function" "api" {
   function_name    = var.project_name
   role             = aws_iam_role.lambda.arn
@@ -276,6 +290,7 @@ resource "aws_lambda_function" "api" {
       ERP_COGNITO_CLIENT_ID     = local.managed_cognito_audience
       ERP_COGNITO_DOMAIN        = local.managed_cognito_domain
       ERP_PUBLIC_BASE_URL       = local.public_base_url
+      ERP_AI_MODEL_ID           = var.ai_model_id
     }
   }
 }

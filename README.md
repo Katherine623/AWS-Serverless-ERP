@@ -88,6 +88,9 @@ v2 cursor 是 opaque token，且會綁定當次篩選條件；拿不同 `status`
 
 ## ERP MCP
 
+作業台另提供同頁「AI 助理」，使用 AWS Bedrock 查詢 ERP 並產生待確認操作草稿。
+使用方式、模型設定與限制見 [AI 助理說明](docs/AI-assistant.md)。
+
 MCP 是獨立的 stdio adapter，不會自動掛到公開 API Gateway。啟動：
 
 ```bash

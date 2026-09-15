@@ -91,6 +91,16 @@
     .amount.positive { color:var(--teal); }
     .file-name { margin-top:8px; color:var(--muted); font-size:15px; }
     footer { display:flex; justify-content:space-between; gap:12px; margin-top:17px; color:var(--muted); font-size:15px; }
+    [hidden] { display:none !important; }
+    .tabs { display:flex; gap:8px; margin:18px 0; }
+    .tabs [aria-selected="true"] { background:var(--deep); color:white; }
+    .chat-log { padding:22px; min-height:250px; max-height:65vh; overflow:auto; }
+    .chat-message { padding:16px; margin:0 0 14px; border-radius:12px; background:var(--paper); white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; }
+    .chat-message.user { background:var(--mint); margin-left:8%; }
+    .chat-message details { white-space:normal; margin-top:12px; }
+    .chat-message pre { white-space:pre-wrap; font-size:14px; max-height:250px; overflow:auto; }
+    .chat-draft { border:1px solid var(--amber); padding:15px; margin-top:12px; border-radius:10px; }
+    .chat-draft button { margin-right:8px; }
     @media (max-width:1200px) { .kpis { grid-template-columns:repeat(3,1fr); } }
     @media (max-width:920px) { .topbar,.security { align-items:start; flex-direction:column; } .top-actions { justify-content:start; } .workspace { grid-template-columns:1fr; } .security details { width:100%; } }
     @media (max-width:620px) { .shell { width:calc(100% - 24px); padding-top:24px; } .kpis { grid-template-columns:repeat(2,1fr); } .kpi { min-height:96px; } .kpi-value { font-size:30px; } .form-grid { grid-template-columns:1fr; } .full { grid-column:auto; } footer { flex-direction:column; } }
@@ -108,6 +118,11 @@
       <details open><summary>登入驗證</summary><div class="security-form"><button id="loginButton" class="button small primary" type="button" disabled>使用 Cognito 登入</button><button id="logoutButton" class="button small" type="button" disabled>登出</button></div><details><summary>進階：手動 Token</summary><div class="security-form"><input id="tokenInput" type="password" autocomplete="off" placeholder="貼上 Cognito ID Token"><button id="saveToken" class="button small primary" type="button">套用</button><button id="clearToken" class="button small" type="button">清除</button></div></details></details>
     </section>
 
+    <nav class="tabs" role="tablist" aria-label="工作區">
+      <button id="operationsTab" class="button" role="tab" aria-selected="true" aria-controls="operationsPanel">作業台</button>
+      <button id="aiTab" class="button" role="tab" aria-selected="false" aria-controls="aiPanel" tabindex="-1">AI 助理</button>
+    </nav>
+    <div id="operationsPanel" role="tabpanel" aria-labelledby="operationsTab">
     <section class="kpis" aria-label="ERP KPI">
       <div class="kpi"><span class="kpi-label">採購單總數</span><strong id="totalOrders" class="kpi-value">—</strong></div><div class="kpi"><span class="kpi-label">待驗收 / 待補貨</span><strong id="pendingReceipts" class="kpi-value">—</strong></div><div class="kpi"><span class="kpi-label">已完成收料</span><strong id="completedReceipts" class="kpi-value">—</strong></div><div class="kpi"><span class="kpi-label">異常收料紀錄</span><strong id="exceptionCount" class="kpi-value warn">—</strong></div><div class="kpi"><span class="kpi-label">低庫存料號</span><strong id="lowStockCount" class="kpi-value amber">—</strong></div><div class="kpi"><span class="kpi-label">隔離庫存總量</span><strong id="quarantineTotal" class="kpi-value amber">—</strong></div>
     </section>
@@ -126,6 +141,17 @@
         <section class="panel"><div class="panel-head"><div><h2>庫存調整 / 退貨 / 報廢</h2><p class="panel-note">每次異動都需要理由與 Idempotency-Key。</p></div><span class="badge warn">approver</span></div><form id="adjustmentForm" class="form"><div class="form-grid"><div><label for="adjustmentMaterial">料號</label><select id="adjustmentMaterial" required></select></div><div><label for="adjustmentType">異動類型</label><select id="adjustmentType"><option value="盤點調整">盤點調整</option><option value="退貨">退貨</option><option value="報廢">報廢</option></select></div><div><label for="adjustmentQuantity">異動數量</label><input id="adjustmentQuantity" type="number" min="-1000000000" max="1000000000" required placeholder="退貨 / 報廢請填負數"></div><div class="full"><label for="adjustmentReason">異動理由</label><textarea id="adjustmentReason" maxlength="500" required></textarea></div></div><div class="form-actions"><button class="button primary" type="submit">寫入庫存帳本</button></div></form><div id="adjustmentResult" class="result" hidden></div></section>
         <section class="panel"><div class="panel-head"><div><h2>Excel 採購單匯入</h2><p class="panel-note">取得 S3 預簽名網址，完成後由 SQS worker 非同步匯入。</p></div><div class="panel-head-actions"><a class="button small secondary" href="/purchase-order-template.xlsx" download>下載 Excel 範例</a><span class="badge">批次匯入</span></div></div><form id="importForm" class="form"><label for="excelFile">選擇 .xlsx 檔案</label><input id="excelFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required><div id="fileName" class="file-name">尚未選擇檔案</div><p class="help">下載範例後請刪除示範資料列，只保留第一列欄位名稱再填寫；同一個 po_id 可填多列料號。必要欄位：po_id、supplier_name、expected_date（YYYY-MM-DD）、material_id、material_name、ordered_quantity；unit 可選。</p><div class="form-actions"><button class="button secondary" type="submit">取得上傳網址並送出</button></div></form><div id="importResult" class="result" hidden></div></section>
       </div>
+    </section>
+    </div>
+    <section id="aiPanel" class="panel" role="tabpanel" aria-labelledby="aiTab" hidden>
+      <div class="panel-head"><div><h2>ERP AI 助理</h2><p class="panel-note">用對話查詢採購與庫存。操作草稿由你核對確認後送出。</p></div><button id="aiClear" class="button small" type="button">清除對話</button></div>
+      <div class="toolbar" aria-label="建議問題">
+        <button class="button small secondary ai-suggestion" type="button">有哪些低庫存料號？</button>
+        <button class="button small secondary ai-suggestion" type="button">列出待處理異常的採購單</button>
+        <button class="button small secondary ai-suggestion" type="button">說明目前營運指標</button>
+      </div>
+      <div id="aiLog" class="chat-log" role="log" aria-live="polite" aria-label="AI 對話"><p class="help">登入後即可提問。回答會附上查詢來源；本頁對話重新整理後即清除。</p></div>
+      <form id="aiForm" class="form"><label for="aiMessage">想了解或處理什麼？</label><textarea id="aiMessage" maxlength="2000" required placeholder="例如：查詢 MAT-1001 的庫存，並說明是否需要補貨"></textarea><div class="form-actions"><button id="aiSend" class="button primary" type="submit">送出問題</button></div><p id="aiStatus" class="help" role="status"></p></form>
     </section>
     <footer><span>FastAPI · Lambda · API Gateway · DynamoDB · SNS Outbox · SQS Import</span><span id="lastRefresh">尚未更新</span></footer>
   </main>

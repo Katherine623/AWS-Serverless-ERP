@@ -100,6 +100,7 @@ function renderAuthRequired(message = '請使用 Cognito 登入，再載入 ERP 
 }
 
 function clearAuth() {
+  resetAiChat();
   localStorage.removeItem('erp.id_token');
   localStorage.removeItem('erp.refresh_token');
   localStorage.removeItem('erp.expires_at');
@@ -168,7 +169,7 @@ async function api(path, options = {}) {
     requestOptions.body = JSON.stringify(requestOptions.body);
   }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), path === '/api/ai/chat' ? 29000 : 15000);
   requestOptions.signal = controller.signal;
   try {
     const response = await fetch(path, requestOptions);
@@ -554,5 +555,129 @@ async function start() {
   renderActor();
   await refresh();
 }
+
+const aiState = { history: [], busy: false, generation: 0 };
+
+function resetAiChat() {
+  aiState.history = [];
+  aiState.generation += 1;
+  $('aiLog').replaceChildren();
+  $('aiStatus').textContent = '';
+}
+
+function selectWorkspace(ai) {
+  $('operationsPanel').hidden = ai;
+  $('aiPanel').hidden = !ai;
+  for (const [id, selected] of [['aiTab', ai], ['operationsTab', !ai]]) {
+    $(id).setAttribute('aria-selected', String(selected));
+    $(id).tabIndex = selected ? 0 : -1;
+  }
+}
+
+$('operationsTab').addEventListener('click', () => selectWorkspace(false));
+$('aiTab').addEventListener('click', () => selectWorkspace(true));
+for (const id of ['operationsTab', 'aiTab']) {
+  $(id).addEventListener('keydown', event => {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const ai = event.key === 'End' || (event.key !== 'Home' && id === 'operationsTab');
+      selectWorkspace(ai);
+      $(ai ? 'aiTab' : 'operationsTab').focus();
+    }
+  });
+}
+$('aiClear').addEventListener('click', resetAiChat);
+document.querySelectorAll('.ai-suggestion').forEach(button => button.addEventListener('click', () => {
+  $('aiMessage').value = button.textContent;
+  $('aiMessage').focus();
+}));
+
+function aiMessage(role, text) {
+  const entry = document.createElement('div');
+  entry.className = `chat-message ${role}`;
+  entry.textContent = `${role === 'user' ? '你' : 'AI 助理'}：\n${text}`;
+  $('aiLog').append(entry);
+  entry.scrollIntoView({ block: 'nearest' });
+  return entry;
+}
+
+function showDraft(entry, draft, generation) {
+  const card = document.createElement('div');
+  card.className = 'chat-draft';
+  const title = document.createElement('strong');
+  title.textContent = `${draft.title} · 待確認`;
+  const content = document.createElement('pre');
+  const labels = { po_id: '採購單', supplier_name: '供應商', expected_date: '預計到貨',
+    material_id: '料號', material_name: '品名', ordered_quantity: '訂購數量',
+    received_quantity: '本次實收', unit: '單位', received_by: '收料人',
+    performed_by: '操作者', resolved_by: '處置人', quantity_change: '異動數量',
+    adjustment_type: '異動類型', reason: '原因', action: '處置方式', note: '說明' };
+  const describe = object => Object.entries(object).map(([field, value]) => field === 'items'
+    ? `品項：\n${value.map((item, index) => `${index + 1}. ${describe(item)}`).join('\n')}`
+    : `${labels[field] || field}：${String(value)}`).join('\n');
+  content.textContent = describe(draft.payload);
+  const confirm = document.createElement('button');
+  confirm.type = 'button'; confirm.className = 'button primary'; confirm.textContent = '確認送出';
+  const cancel = document.createElement('button');
+  cancel.type = 'button'; cancel.className = 'button'; cancel.textContent = '取消';
+  const result = document.createElement('p');
+  const key = newKey('ai-operation');
+  cancel.addEventListener('click', () => {
+    confirm.disabled = true; cancel.disabled = true; result.textContent = '已取消，未送出。';
+  });
+  confirm.addEventListener('click', async () => {
+    if (generation !== aiState.generation) return;
+    const allowed = ['/api/purchase-orders', '/api/receipts', '/api/inventory-adjustments'];
+    if (!allowed.includes(draft.path) && !/^\/api\/purchase-orders\/[^/]+\/exception-resolution$/.test(draft.path)) return;
+    confirm.disabled = true; cancel.disabled = true; result.textContent = '正在送出…';
+    try {
+      const data = await api(draft.path, { method: 'POST', body: draft.payload,
+        headers: draft.requires_idempotency ? { 'Idempotency-Key': key } : {} });
+      if (generation !== aiState.generation) return;
+      title.textContent = `${draft.title} · 已完成`;
+      result.textContent = JSON.stringify(data, null, 2);
+      await refresh();
+    } catch (error) {
+      if (generation !== aiState.generation) return;
+      result.textContent = authErrorMessage(error);
+      // Reuse the operation key when retrying an uncertain response.
+      confirm.disabled = false; cancel.disabled = false; confirm.textContent = '重新送出';
+    }
+  });
+  card.append(title, content, confirm, cancel, result); entry.append(card);
+}
+
+$('aiForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (aiState.busy) return;
+  const message = $('aiMessage').value.trim();
+  if (!message) return;
+  const generation = aiState.generation;
+  aiState.busy = true; $('aiSend').disabled = true;
+  $('aiStatus').textContent = '正在查詢與整理資料…';
+  aiMessage('user', message); $('aiMessage').value = '';
+  try {
+    const response = await api('/api/ai/chat', { method: 'POST', body: { message, history: aiState.history.slice(-8) } });
+    if (generation !== aiState.generation) return;
+    const entry = aiMessage('assistant', response.answer);
+    if (response.sources.length) {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary'); summary.textContent = '查看本次查詢來源';
+      const data = document.createElement('pre'); data.textContent = JSON.stringify(response.sources, null, 2);
+      details.append(summary, data); entry.append(details);
+    }
+    response.drafts.forEach(draft => showDraft(entry, draft, generation));
+    aiState.history.push({ role: 'user', content: message }, { role: 'assistant', content: response.answer.slice(0, 6000) });
+    aiState.history = aiState.history.slice(-8);
+    $('aiStatus').textContent = '回答已完成。請核對查詢來源與操作內容。';
+  } catch (error) {
+    if (generation === aiState.generation) {
+      aiMessage('assistant', authErrorMessage(error));
+      $('aiMessage').value = message; $('aiStatus').textContent = '未取得回答，可重新送出。';
+    }
+  } finally {
+    aiState.busy = false; $('aiSend').disabled = false;
+  }
+});
 
 start();

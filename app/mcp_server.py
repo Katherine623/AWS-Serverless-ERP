@@ -12,8 +12,17 @@ from app.erp import (
     ResolveExceptionRequest,
     store,
 )
+from app.erp_tools import read_tool
 
 mcp = FastMCP("AWS Serverless ERP")
+
+
+@mcp.tool()
+def query_erp(tool_name: str, arguments_json: str = "{}") -> str:
+    """Shared AI read interface: get_dashboard/list_purchase_orders/list_inventory/
+    list_inventory_transactions. Supports limit, cursor and filters; returns JSON.
+    """
+    return _dump(read_tool(tool_name, json.loads(arguments_json)))
 
 
 def _dump(value: Any) -> str:

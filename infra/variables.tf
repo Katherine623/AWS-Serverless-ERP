@@ -1,3 +1,9 @@
+variable "ai_model_id" {
+  description = "Regional Bedrock model ID for ERP assistant; empty disables AI."
+  type        = string
+  default     = ""
+}
+
 variable "aws_region" {
   description = "AWS Region for the application."
   type        = string

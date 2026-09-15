@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from mangum import Mangum
 
+from app.ai import ChatRequest, ChatResponse, chat, model_id
 from app.auth import Actor, require_roles
 from app.config import get_settings
 from app.erp import (
@@ -45,6 +46,19 @@ WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 logger = logging.getLogger(__name__)
 ERP_READ_ROLES = ("admin", "approver", "purchaser", "warehouse")
+
+
+@app.get("/api/ai/config")
+def ai_config(actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))]) -> dict:
+    return {"enabled": bool(model_id()), "provider": "Amazon Bedrock"}
+
+
+@app.post("/api/ai/chat", response_model=ChatResponse)
+def ai_chat(
+    request: ChatRequest,
+    actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
+) -> ChatResponse:
+    return chat(request, actor)
 
 
 @app.middleware("http")
