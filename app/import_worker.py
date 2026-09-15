@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import closing
 from datetime import date, datetime
+from io import BytesIO
 from urllib.parse import unquote_plus
 
 import boto3
@@ -33,10 +35,18 @@ def _required_cell(row: tuple[object, ...], index: int, field: str) -> str:
 
 
 def _import_workbook(bucket: str, key: str) -> int:
+    response = s3.get_object(Bucket=bucket, Key=key)
+    # XLSX is a ZIP archive: openpyxl needs seek(), which S3 StreamingBody lacks.
+    with closing(response["Body"]) as body:
+        contents = body.read()
+    with BytesIO(contents) as source:
+        return _import_xlsx(source)
+
+
+def _import_xlsx(source: BytesIO) -> int:
     from openpyxl import load_workbook
 
-    response = s3.get_object(Bucket=bucket, Key=key)
-    workbook = load_workbook(response["Body"], read_only=True, data_only=True)
+    workbook = load_workbook(source, read_only=True, data_only=True)
     try:
         sheet = workbook.active
         rows = sheet.iter_rows(values_only=True)
