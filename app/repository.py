@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import time
+from threading import Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -42,6 +43,18 @@ class ReceiptRecord(Protocol):
 
 
 class ErpRepository(Protocol):
+    def save_record(self, kind: str, record: dict, previous: dict | None = None) -> None:
+        ...
+
+    def get_record(self, kind: str, identifier: str) -> dict | None:
+        ...
+
+    def list_records(self, kind: str, owner: str, limit: int = 20) -> list[dict]:
+        ...
+
+    def dashboard_stats(self) -> dict:
+        ...
+
     def get_purchase_order(self, po_id: str) -> Any | None:
         ...
 
@@ -109,7 +122,7 @@ class ErpRepository(Protocol):
         inventory: list[tuple[Any, Any | None]],
         inventory_transactions: list[Any],
         alerts: list[AlertEvent],
-    ) -> None:
+    ) -> Any:
         ...
 
     def save_inventory_adjustment(
@@ -120,7 +133,8 @@ class ErpRepository(Protocol):
         inventory: Any,
         previous_inventory: Any,
         transaction: Any,
-    ) -> None:
+        alerts: list[AlertEvent] | None = None,
+    ) -> Any:
         ...
 
     def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
@@ -174,6 +188,36 @@ class InMemoryRepository:
         self.alert_batch_attempts: dict[str, int] = {}
         self.idempotency_expiry: dict[str, float] = {}
         self.mutation_idempotency: dict[str, tuple[Any, str]] = {}
+        self.records: dict[tuple[str, str], dict] = {}
+        self._record_lock = Lock()
+
+    def save_record(self, kind: str, record: dict, previous: dict | None = None) -> None:
+        key = (kind, record["id"])
+        with self._record_lock:
+            if self.records.get(key) != previous:
+                raise IdempotencyConflictError("紀錄已更新，請稍後重試")
+            self.records[key] = json.loads(json.dumps(record))
+
+    def get_record(self, kind: str, identifier: str) -> dict | None:
+        value = self.records.get((kind, identifier))
+        return json.loads(json.dumps(value)) if value else None
+
+    def list_records(self, kind: str, owner: str, limit: int = 20) -> list[dict]:
+        return sorted((value for (category, _), value in self.records.items()
+                       if category == kind and value["owner"] == owner),
+                      key=lambda item: item["created_at"], reverse=True)[:limit]
+
+    def dashboard_stats(self) -> dict:
+        return {
+            "total_purchase_orders": len(self.purchase_orders),
+            "pending_receipts": sum(o.status in {"待驗收", "待補貨"}
+                                    for o in self.purchase_orders.values()),
+            "completed_receipts": self.completed_receipt_count(),
+            "exception_count": self.exception_count(),
+            "inventory_item_count": len(self.inventory),
+            "low_stock_count": sum(i.quantity < i.reorder_point for i in self.inventory.values()),
+            "quarantine_total": sum(i.quarantine_quantity for i in self.inventory.values()),
+        }
 
     def get_purchase_order(self, po_id: str) -> Any | None:
         return self.purchase_orders.get(po_id)
@@ -312,13 +356,13 @@ class InMemoryRepository:
         inventory: list[tuple[Any, Any | None]],
         inventory_transactions: list[Any],
         alerts: list[AlertEvent],
-    ) -> None:
+    ) -> Any:
         existing = idempotency_key and self.receipt_for_key(idempotency_key)
         if existing:
             existing, existing_hash = existing
             if existing_hash != request_hash:
                 raise IdempotencyConflictError("Idempotency-Key 已用於不同的收料請求")
-            return
+            return existing
         self.purchase_orders[order.po_id] = order
         for item, _ in inventory:
             self.inventory[item.material_id] = item
@@ -336,6 +380,8 @@ class InMemoryRepository:
                 time.time() + get_settings().idempotency_ttl_days * 86400
             )
 
+        return result
+
     def save_inventory_adjustment(
         self,
         result: Any,
@@ -344,17 +390,24 @@ class InMemoryRepository:
         inventory: Any,
         previous_inventory: Any,
         transaction: Any,
-    ) -> None:
+        alerts: list[AlertEvent] | None = None,
+    ) -> Any:
         existing = self.mutation_for_key(idempotency_key)
         if existing:
             if existing[1] != request_hash:
                 raise IdempotencyConflictError("Idempotency-Key 已用於不同的庫存異動")
-            return
+            return existing[0]
         if self.inventory.get(inventory.material_id) != previous_inventory:
             raise IdempotencyConflictError("庫存已由另一筆操作更新，請重新整理後再試")
         self.inventory[inventory.material_id] = inventory
         self.inventory_transactions[transaction.transaction_id] = transaction
         self.mutation_idempotency[idempotency_key] = (result, request_hash)
+
+        if alerts:
+            self.alert_batches[result.adjustment_id] = list(alerts)
+            self.alert_batch_status[result.adjustment_id] = "pending"
+
+        return result
 
     def list_pending_alert_batches(self) -> list[tuple[str, list[AlertEvent]]]:
         now = time.time()
@@ -434,6 +487,77 @@ class InMemoryRepository:
 class DynamoDbRepository:
     def __init__(self, table_name: str) -> None:
         self._table = boto3.resource("dynamodb").Table(table_name)
+
+    def save_record(self, kind: str, record: dict, previous: dict | None = None) -> None:
+        item = {
+            "PK": f"record#{kind}#{record['id']}", "SK": "META",
+            "entity": f"{kind}#{record['owner']}",
+            "entity_key": f"{record['created_at']}#{record['id']}",
+            "data": json.dumps(record, ensure_ascii=False),
+        }
+        kwargs = {"ConditionExpression": "attribute_not_exists(PK)"}
+        if previous is not None:
+            kwargs = {"ConditionExpression": "#data = :previous",
+                      "ExpressionAttributeNames": {"#data": "data"},
+                      "ExpressionAttributeValues": {
+                          ":previous": json.dumps(previous, ensure_ascii=False)}}
+        try:
+            self._table.put_item(Item=item, **kwargs)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise IdempotencyConflictError("紀錄已更新，請稍後重試") from exc
+            raise
+
+    def get_record(self, kind: str, identifier: str) -> dict | None:
+        item = self._table.get_item(
+            Key={"PK": f"record#{kind}#{identifier}", "SK": "META"}, ConsistentRead=True
+        ).get("Item")
+        return json.loads(item["data"]) if item else None
+
+    def list_records(self, kind: str, owner: str, limit: int = 20) -> list[dict]:
+        response = self._table.query(
+            IndexName="EntityIndex", KeyConditionExpression=Key("entity").eq(f"{kind}#{owner}"),
+            ScanIndexForward=False, Limit=limit,
+        )
+        return [json.loads(item["data"]) for item in response.get("Items", [])]
+
+    def dashboard_stats(self) -> dict:
+        stats = dict.fromkeys(["total_purchase_orders", "pending_receipts", "completed_receipts",
+                               "exception_count", "inventory_item_count", "low_stock_count",
+                               "quarantine_total"], 0)
+        for entity in ("purchase_order", "receipt", "inventory"):
+            kwargs = {
+                "IndexName": "EntityIndex", "KeyConditionExpression": Key("entity").eq(entity),
+                "ProjectionExpression": "#data", "ExpressionAttributeNames": {"#data": "data"},
+            }
+            while True:
+                page = self._table.query(**kwargs)
+                for item in page.get("Items", []):
+                    data = json.loads(item["data"])
+                    if entity == "purchase_order":
+                        stats["total_purchase_orders"] += 1
+                        stats["pending_receipts"] += data["status"] in {"待驗收", "待補貨"}
+                    elif entity == "receipt":
+                        stats["completed_receipts"] += data["status"] == "已完成"
+                        stats["exception_count"] += bool(data.get("exceptions"))
+                    else:
+                        stats["inventory_item_count"] += 1
+                        stats["low_stock_count"] += data["quantity"] < data.get("reorder_point", 10)
+                        stats["quarantine_total"] += data.get("quarantine_quantity", 0)
+                if not page.get("LastEvaluatedKey"):
+                    break
+                kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+        return stats
+
+    @staticmethod
+    def _alert_item(identifier: str, alerts: list[AlertEvent]) -> dict:
+        return {
+            "PK": f"alert_batch#{identifier}", "SK": "META", "entity": "alert_batch",
+            "entity_key": identifier, "status": "pending", "attempts": 0, "lease_until": 0,
+            "expires_at": int(time.time()) + get_settings().alert_outbox_ttl_days * 86400,
+            "data": json.dumps([event.model_dump(mode="json") for event in alerts],
+                               ensure_ascii=False),
+        }
 
     @staticmethod
     def _item(entity: str, key: str, value: Any) -> dict[str, Any]:
@@ -517,7 +641,10 @@ class DynamoDbRepository:
 
         matched: list[dict[str, Any]] = []
         last_key: dict[str, Any] | None = None
-        while len(matched) < limit:
+        # Bound filtered queries; a short/empty page may still have a next cursor.
+        queries = 0
+        while len(matched) < limit and queries < 5:
+            queries += 1
             kwargs["Limit"] = limit - len(matched)
             response = self._table.query(IndexName="EntityIndex", **kwargs)
             items = response.get("Items", [])
@@ -761,7 +888,7 @@ class DynamoDbRepository:
         inventory: list[tuple[Any, Any | None]],
         inventory_transactions: list[Any],
         alerts: list[AlertEvent],
-    ) -> None:
+    ) -> Any:
         receipt_item = self._item("receipt", result.receipt_id, result)
         receipt_item["has_exceptions"] = bool(result.exceptions)
         receipt_item["status"] = result.status
@@ -864,11 +991,13 @@ class DynamoDbRepository:
                         raise IdempotencyConflictError(
                             "Idempotency-Key 已用於不同的收料請求"
                         ) from exc
-                    return
+                    return existing[0]
                 raise IdempotencyConflictError(
                     "採購單或庫存已由另一筆收料更新，請重新整理後再試"
                 ) from exc
             raise
+
+        return result
 
     def save_inventory_adjustment(
         self,
@@ -878,7 +1007,8 @@ class DynamoDbRepository:
         inventory: Any,
         previous_inventory: Any,
         transaction: Any,
-    ) -> None:
+        alerts: list[AlertEvent] | None = None,
+    ) -> Any:
         actions = [
             {
                 "Put": {
@@ -924,6 +1054,9 @@ class DynamoDbRepository:
                 }
             },
         ]
+        if alerts:
+            actions.append({"Put": {"TableName": self._table.name,
+                                    "Item": self._alert_item(result.adjustment_id, alerts)}})
         try:
             self._table.meta.client.transact_write_items(TransactItems=actions)
         except ClientError as exc:
@@ -934,11 +1067,13 @@ class DynamoDbRepository:
                         raise IdempotencyConflictError(
                             "Idempotency-Key 已用於不同的庫存異動"
                         ) from exc
-                    return
+                    return existing[0]
                 raise IdempotencyConflictError(
                     "庫存已由另一筆操作更新，請重新整理後再試"
                 ) from exc
             raise
+
+        return result
 
     def save_purchase_order(self, order: Any, previous_order: Any) -> None:
         try:

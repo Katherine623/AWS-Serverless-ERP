@@ -7,10 +7,11 @@ from urllib.parse import quote
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError, ReadTimeoutError
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.ai_actions import save_draft
 from app.auth import Actor
 from app.erp import (
     CreatePurchaseOrderRequest,
@@ -51,6 +52,7 @@ class DraftRequest(BaseModel):
 
 
 class ActionDraft(BaseModel):
+    id: str = ""
     action: str
     title: str
     path: str
@@ -151,6 +153,7 @@ def chat(request: ChatRequest, actor: Actor) -> ChatResponse:
                 try:
                     if call["name"] == "prepare_action":
                         draft = prepare_action(call["input"], actor)
+                        draft.id = save_draft(call["input"], actor, draft.model_dump())
                         drafts.append(draft)
                         data = {"status": "等待使用者按下確認", **draft.model_dump()}
                     else:
@@ -170,11 +173,20 @@ def chat(request: ChatRequest, actor: Actor) -> ChatResponse:
     except ClientError as exc:
         logger.exception("Bedrock ERP assistant request failed")
         message = exc.response.get("Error", {}).get("Message", "").lower()
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code in {"ThrottlingException", "ServiceQuotaExceededException"}:
+            raise HTTPException(status_code=429, detail="AI 配額不足或請求過於頻繁，"
+                                "請稍後重試；持續發生時請管理員確認 Bedrock 配額。") from None
+        if code == "AccessDeniedException" and "being verified" not in message:
+            raise HTTPException(status_code=503, detail="AI 模型權限不足，"
+                                "請管理員確認 Bedrock 模型使用權限。") from None
         if "account is currently being verified" in message:
             detail = "AWS 帳戶仍在驗證中，Bedrock 尚未開放使用。請待 AWS 驗證完成後重試。"
         else:
             detail = "AI 模型暫時不可用，請聯絡管理員確認 Bedrock 權限與模型設定。"
         raise HTTPException(status_code=503, detail=detail) from None
+    except ReadTimeoutError:
+        raise HTTPException(status_code=504, detail="AI 回應逾時，請縮短問題後重試。") from None
     except BotoCoreError:
         logger.exception("Bedrock ERP assistant request failed")
         raise HTTPException(status_code=503, detail="AI 暫時無法回應，請稍後重試。") from None

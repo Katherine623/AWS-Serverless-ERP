@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from threading import Lock
@@ -153,6 +154,7 @@ class ExcelUploadResponse(BaseModel):
     object_key: str
     upload_url: str
     expires_in: int
+    job_id: str = ""
 
 
 class ResolveExceptionRequest(BaseModel):
@@ -288,23 +290,14 @@ class ErpStore:
 
     def dashboard(self) -> DashboardSummary:
         with self._lock:
-            orders = self.repository.list_purchase_orders()
-            inventory = self.repository.list_inventory()
-            completed = self.repository.completed_receipt_count()
-            exceptions = self.repository.exception_count()
-            pending = sum(
-                order.status in RECEIVABLE_STATUSES
-                for order in orders
-            )
-            return DashboardSummary(
-                total_purchase_orders=len(orders),
-                pending_receipts=pending,
-                completed_receipts=completed,
-                exception_count=exceptions,
-                inventory_item_count=len(inventory),
-                low_stock_count=sum(item.quantity < item.reorder_point for item in inventory),
-                quarantine_total=sum(item.quarantine_quantity for item in inventory),
-            )
+            cached = getattr(self, "_dashboard_cache", None)
+            # Short-lived cache only for remote storage; local tests always see current data.
+            if (cached and cached[0] is self.repository and cached[1] > time.monotonic()):
+                return cached[2]
+            result = DashboardSummary(**self.repository.dashboard_stats())
+            if get_settings().dynamodb_table_name:
+                self._dashboard_cache = (self.repository, time.monotonic() + 20, result)
+            return result
 
     def list_purchase_orders(self) -> list[PurchaseOrder]:
         return sorted(
@@ -375,6 +368,7 @@ class ErpStore:
         request: InventoryAdjustmentRequest,
         idempotency_key: str,
     ) -> InventoryAdjustmentResult:
+        self._dashboard_cache = None
         request_hash = hashlib.sha256(
             json.dumps(request.model_dump(mode="json"), sort_keys=True).encode()
         ).hexdigest()
@@ -384,6 +378,11 @@ class ErpStore:
                 raise IdempotencyConflictError("Idempotency-Key 已用於不同的庫存異動")
             return existing[0]
         with self._lock:
+            existing = self.repository.mutation_for_key(idempotency_key)
+            if existing:
+                if existing[1] != request_hash:
+                    raise IdempotencyConflictError("Idempotency-Key 已用於不同的庫存異動")
+                return existing[0]
             previous_inventory = self.repository.get_inventory(request.material_id)
             if not previous_inventory:
                 raise InventoryNotFoundError(f"找不到料號 {request.material_id}")
@@ -416,17 +415,30 @@ class ErpStore:
                 performed_by=request.performed_by,
                 occurred_at=occurred_at,
             )
-            self.repository.save_inventory_adjustment(
+            alerts = []
+            if inventory.quantity < inventory.reorder_point:
+                alerts.append(AlertEvent(
+                    alert_type="低庫存", po_id="", receipt_id=adjustment_id,
+                    material_id=inventory.material_id, material_name=inventory.material_name,
+                    message=f"{inventory.material_name} 庫存 {inventory.quantity} 低於安全庫存 "
+                            f"{inventory.reorder_point}；來源：{request.adjustment_type}",
+                    current_quantity=inventory.quantity, reorder_point=inventory.reorder_point,
+                    occurred_at=occurred_at,
+                ))
+            result = self.repository.save_inventory_adjustment(
                 result,
                 idempotency_key,
                 request_hash,
                 inventory,
                 previous_inventory,
                 transaction,
+                alerts,
             )
-            return result
+        self.dispatch_pending_alerts()
+        return result
 
     def create_purchase_order(self, request: CreatePurchaseOrderRequest) -> PurchaseOrder:
+        self._dashboard_cache = None
         with self._lock:
             known_materials = {
                 item.material_id: (item.material_name, item.unit)
@@ -457,6 +469,7 @@ class ErpStore:
             return self.repository.create_purchase_order(order)
 
     def receive(self, request: ReceiptRequest, idempotency_key: str | None = None) -> ReceiptResult:
+        self._dashboard_cache = None
         request_hash = hashlib.sha256(
             json.dumps(request.model_dump(mode="json"), sort_keys=True).encode()
         ).hexdigest()
@@ -468,11 +481,17 @@ class ErpStore:
                 return existing[0]
         alerts: list[AlertEvent] = []
         with self._lock:
+            existing = idempotency_key and self.repository.receipt_for_key(idempotency_key)
+            if existing:
+                if existing[1] != request_hash:
+                    raise IdempotencyConflictError("Idempotency-Key 已用於不同的收料請求")
+                return existing[0]
             order = self.repository.get_purchase_order(request.po_id)
             if not order:
                 raise PurchaseOrderNotFoundError(f"找不到採購單 {request.po_id}")
             if order.status not in {"待驗收", "待補貨"}:
                 raise IdempotencyConflictError(f"採購單 {request.po_id} 目前不可收料")
+            order = order.model_copy(deep=True)
             ordered = {item.material_id: item for item in order.items}
             received = {item.material_id: item.received_quantity for item in request.items}
             if len(received) != len(request.items):
@@ -569,7 +588,7 @@ class ErpStore:
                             occurred_at=result.received_at,
                         )
                     )
-            self.repository.save_receipt(
+            result = self.repository.save_receipt(
                 result,
                 idempotency_key,
                 request_hash,
@@ -604,6 +623,7 @@ class ErpStore:
     def resolve_exception(
         self, po_id: str, request: ResolveExceptionRequest
     ) -> PurchaseOrder:
+        self._dashboard_cache = None
         with self._lock:
             order = self.repository.get_purchase_order(po_id)
             if not order:

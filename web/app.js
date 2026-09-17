@@ -4,6 +4,8 @@ const state = {
   allOrders: [],
   inventory: [],
   transactions: [],
+  transactionCursor: null,
+  actionCursors: {},
   orderCursor: null,
   inventoryCursor: null,
   orderFilters: { status: '', supplier: '' },
@@ -20,6 +22,32 @@ const esc = value => String(value ?? '').replace(/[&<>\'\"]/g, character => ({
   '"': '&quot;',
 }[character]));
 const newKey = prefix => `${prefix}-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`}`;
+
+function operationStorageKey(kind) {
+  const owner = decodeClaims(tokenValue()).sub;
+  if (!owner) throw new Error('無法取得操作者，請重新登入。');
+  return `erp.pending.${owner}.${kind}`;
+}
+
+async function submitOperation(kind, path, body) {
+  const storageKey = operationStorageKey(kind);
+  const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
+  const fingerprint = JSON.stringify(body);
+  if (saved && saved.fingerprint !== fingerprint) {
+    throw new Error('上一筆操作結果尚未確認。請先重送上一筆，或查核帳本後清除待確認操作。');
+  }
+  const operation = saved || { path, body, fingerprint, key: newKey(kind) };
+  sessionStorage.setItem(storageKey, JSON.stringify(operation));
+  const result = await api(path, { method: 'POST', body, headers: { 'Idempotency-Key': operation.key } });
+  sessionStorage.removeItem(storageKey);
+  return result;
+}
+
+async function retryOperation(kind) {
+  const saved = JSON.parse(sessionStorage.getItem(operationStorageKey(kind)) || 'null');
+  if (!saved) throw new Error('沒有待確認操作。');
+  return submitOperation(kind, saved.path, saved.body);
+}
 const formatDateTime = value => value ? new Date(value).toLocaleString('zh-TW') : '—';
 const setResult = (id, message, type = '') => {
   const element = $(id);
@@ -101,6 +129,8 @@ function renderAuthRequired(message = '請使用 Cognito 登入，再載入 ERP 
 
 function clearAuth() {
   resetAiChat();
+  $('importJobs').replaceChildren();
+  $('aiActions').replaceChildren();
   localStorage.removeItem('erp.id_token');
   localStorage.removeItem('erp.refresh_token');
   localStorage.removeItem('erp.expires_at');
@@ -333,20 +363,26 @@ function renderInventory() {
 }
 
 function renderTransactions() {
-  $('transactions').innerHTML = state.transactions.length ? state.transactions.slice(0, 20).map(transaction => {
+  $('transactions').innerHTML = state.transactions.length ? state.transactions.map(transaction => {
     const positive = transaction.quantity_change >= 0;
     return `<div class="transaction"><div><strong>${esc(transaction.material_name)} <span class="badge">${esc(transaction.transaction_type)}</span></strong><div class="transaction-meta">${esc(transaction.material_id)} · ${esc(transaction.reference_id)} · ${esc(transaction.performed_by)} · ${formatDateTime(transaction.occurred_at)}</div></div><span class="amount ${positive ? 'positive' : 'negative'}">${positive ? '+' : ''}${transaction.quantity_change}</span></div>`;
   }).join('') : '<div class="empty">尚無庫存異動</div>';
 }
 
 function populateActions() {
+  const selectedReceipt = $('receiptPo').value;
+  const selectedResolution = $('resolutionPo').value;
+  const selectedMaterial = $('adjustmentMaterial').value;
   const receivable = state.allOrders.filter(order => ['待驗收', '待補貨'].includes(order.status));
   const exceptions = state.allOrders.filter(order => order.status === '待處理異常');
   $('receiptPo').innerHTML = receivable.length ? receivable.map(order => `<option value="${esc(order.po_id)}">${esc(order.po_id)} · ${esc(order.supplier_name)} · ${esc(order.status)}</option>`).join('') : '<option value="">目前沒有可收料 PO</option>';
   $('resolutionPo').innerHTML = exceptions.length ? exceptions.map(order => `<option value="${esc(order.po_id)}">${esc(order.po_id)} · ${esc(order.supplier_name)}</option>`).join('') : '<option value="">目前沒有待處理異常</option>';
   $('receiptSubmit').disabled = !receivable.length;
   $('resolutionSubmit').disabled = !exceptions.length;
+  if (receivable.some(o => o.po_id === selectedReceipt)) $('receiptPo').value = selectedReceipt;
+  if (exceptions.some(o => o.po_id === selectedResolution)) $('resolutionPo').value = selectedResolution;
   $('adjustmentMaterial').innerHTML = state.inventory.length ? state.inventory.map(item => `<option value="${esc(item.material_id)}">${esc(item.material_id)} · ${esc(item.material_name)}（可用 ${item.quantity}）</option>`).join('') : '<option value="">目前沒有庫存</option>';
+  if (state.inventory.some(i => i.material_id === selectedMaterial)) $('adjustmentMaterial').value = selectedMaterial;
   renderReceiptItems();
 }
 
@@ -380,14 +416,36 @@ async function loadInventory(reset) {
   state.inventory = page.items || [];
   state.inventoryCursor = page.next_cursor || null;
   renderInventory();
+  populateActions();
 }
 
-async function loadTransactions() {
-  const transactions = await api('/api/inventory-transactions');
-  state.transactions = (transactions || []).sort((left, right) =>
+async function loadTransactions(reset = true) {
+  if (reset) state.transactionCursor = null;
+  const params = new URLSearchParams({ limit: '50' });
+  if (state.transactionCursor) params.set('cursor', state.transactionCursor);
+  const page = await api(`/api/v2/inventory-transactions?${params}`);
+  state.transactionCursor = page.next_cursor;
+  $('transactionNext').disabled = !page.next_cursor;
+  state.transactions = (page.items || []).sort((left, right) =>
     new Date(right.occurred_at).getTime() - new Date(left.occurred_at).getTime()
   );
   renderTransactions();
+}
+
+async function loadActionOrders(reset = true) {
+  if (reset) { state.allOrders = []; state.actionCursors = {}; }
+  for (const status of ['待驗收', '待補貨', '待處理異常']) {
+    if (!reset && !state.actionCursors[status]) continue;
+    const params = new URLSearchParams({ limit: '50', status });
+    if (state.actionCursors[status]) params.set('cursor', state.actionCursors[status]);
+    const page = await api(`/api/v2/purchase-orders?${params}`);
+    state.actionCursors[status] = page.next_cursor;
+    const byId = new Map(state.allOrders.map(order => [order.po_id, order]));
+    page.items.forEach(order => byId.set(order.po_id, order));
+    state.allOrders = [...byId.values()];
+  }
+  $('actionNext').disabled = !Object.values(state.actionCursors).some(Boolean);
+  populateActions();
 }
 
 async function refresh() {
@@ -397,13 +455,13 @@ async function refresh() {
     return;
   }
   try {
-    const results = await Promise.all([api('/api/dashboard'), loadOrders(true), loadInventory(true), loadTransactions(), api('/api/purchase-orders?limit=200')]);
+    const results = await Promise.all([api('/api/dashboard'), loadOrders(true), loadInventory(true), loadTransactions(), loadActionOrders(true)]);
     state.dashboard = results[0];
-    state.allOrders = results[4];
     renderKpis(state.dashboard);
     populateActions();
     renderHealth(true, 'API 已連線');
     $('lastRefresh').textContent = `最後更新 ${new Date().toLocaleTimeString('zh-TW')}`;
+    loadImportJobs().catch(() => {});
   } catch (error) {
     const message = authErrorMessage(error);
     if (error.status === 401) {
@@ -419,6 +477,8 @@ async function refresh() {
 
 $('refreshButton').addEventListener('click', refresh);
 $('transactionRefresh').addEventListener('click', () => loadTransactions().catch(error => setResult('poResult', esc(authErrorMessage(error)), 'error')));
+$('transactionNext').addEventListener('click', () => loadTransactions(false).catch(error => setResult('poResult', esc(authErrorMessage(error)), 'error')));
+$('actionNext').addEventListener('click', () => loadActionOrders(false).catch(error => setResult('poResult', esc(authErrorMessage(error)), 'error')));
 $('orderFilter').addEventListener('click', () => { state.orderFilters = { status: $('orderStatus').value, supplier: $('orderSupplier').value.trim() }; loadOrders(true).catch(error => setResult('poResult', esc(authErrorMessage(error)), 'error')); });
 $('orderReset').addEventListener('click', () => { $('orderStatus').value = ''; $('orderSupplier').value = ''; state.orderFilters = { status: '', supplier: '' }; loadOrders(true).catch(error => setResult('poResult', esc(authErrorMessage(error)), 'error')); });
 $('orderNext').addEventListener('click', () => loadOrders(false).catch(error => setResult('poResult', esc(authErrorMessage(error)), 'error')));
@@ -458,7 +518,7 @@ $('receiptForm').addEventListener('submit', async event => {
   setResult('receiptResult', '驗收寫入中…');
   try {
     const items = [...document.querySelectorAll('.receipt-quantity')].map(input => ({ material_id: input.dataset.material, received_quantity: Number(input.value) }));
-    const data = await api('/api/receipts', { method: 'POST', headers: { 'Idempotency-Key': newKey('receipt') }, body: { po_id: $('receiptPo').value, items } });
+    const data = await submitOperation('receipt', '/api/receipts', { po_id: $('receiptPo').value, items });
     const message = data.exceptions.length ? data.exceptions.map(esc).join('<br>') : '驗收完成，可用庫存已更新。';
     setResult('receiptResult', `<strong>${esc(data.status)}</strong><br>${message}<br><span class="help">收料單：${esc(data.receipt_id)}</span>`, data.exceptions.length ? 'alert' : '');
     await refresh();
@@ -492,7 +552,7 @@ $('adjustmentForm').addEventListener('submit', async event => {
   button.disabled = true;
   setResult('adjustmentResult', '庫存異動寫入中…');
   try {
-    const data = await api('/api/inventory-adjustments', { method: 'POST', headers: { 'Idempotency-Key': newKey('adjustment') }, body: { material_id: $('adjustmentMaterial').value, quantity_change: Number($('adjustmentQuantity').value), adjustment_type: $('adjustmentType').value, reason: $('adjustmentReason').value.trim(), performed_by: decodeClaims(tokenValue()).sub || '登入使用者' } });
+    const data = await submitOperation('adjustment', '/api/inventory-adjustments', { material_id: $('adjustmentMaterial').value, quantity_change: Number($('adjustmentQuantity').value), adjustment_type: $('adjustmentType').value, reason: $('adjustmentReason').value.trim() });
     setResult('adjustmentResult', `已寫入 <strong>${esc(data.adjustment_id)}</strong>：${esc(data.quantity_before)} → ${esc(data.quantity_after)}。`);
     $('adjustmentQuantity').value = '';
     $('adjustmentReason').value = '';
@@ -517,15 +577,19 @@ $('importForm').addEventListener('submit', async event => {
   const button = form.querySelector('button');
   const file = $('excelFile').files[0];
   if (!file) return;
+  if (file.size > 10 * 1024 * 1024) {
+    setResult('importResult', 'Excel 最多 10 MB，請拆分檔案。', 'error'); return;
+  }
   button.disabled = true;
   setResult('importResult', '建立預簽名網址中…');
   try {
     const response = await api('/api/imports/excel/upload-url', { method: 'POST', body: { file_name: file.name } });
     const upload = await fetch(response.upload_url, { method: 'PUT', headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, body: file });
-    if (!upload.ok) return Promise.reject(new Error(`S3 上傳失敗（${upload.status}）`));
+    if (!upload.ok) throw new Error(`S3 上傳失敗（${upload.status}）`);
     setResult('importResult', `檔案已送入匯入佇列：<strong>${esc(response.object_key)}</strong><br><span class="help">worker 會非同步建立 PO；重複相同定義會自動略過。</span>`);
     form.reset();
     $('fileName').textContent = '尚未選擇檔案';
+    if (response.job_id) watchImport(response.job_id);
   } catch (error) {
     setResult('importResult', esc(authErrorMessage(error)), 'error');
   } finally {
@@ -558,6 +622,89 @@ async function start() {
 
 const aiState = { history: [], busy: false, generation: 0 };
 
+const jobStatus = { awaiting_upload: '等待上傳', processing: '處理中', completed: '完成',
+  partial_failed: '部分資料失敗', failed: '失敗／等待重試', draft: '待確認',
+  executing: '執行中／結果待確認', cancelled: '已取消' };
+
+function renderImportJob(job) {
+  const card = document.createElement('div'); card.className = 'chat-message';
+  card.textContent = `${job.file_name || job.object_key} · ${jobStatus[job.status] || job.status}\n`
+    + `新增 ${job.imported || 0} 張，略過 ${job.skipped || 0} 張，失敗 ${job.failed || 0} 筆\n`
+    + (job.errors || []).map(error => `${error.row ? `第 ${error.row} 列 ` : ''}${error.po_id || ''} ${error.message}`).join('\n');
+  return card;
+}
+
+async function loadImportJobs() {
+  const generation = aiState.generation;
+  const jobs = await api('/api/imports/excel/jobs');
+  if (generation !== aiState.generation) return;
+  $('importJobs').replaceChildren(...jobs.map(renderImportJob));
+  if (!jobs.length) $('importJobs').textContent = '尚無匯入紀錄。';
+}
+
+async function watchImport(identifier) {
+  const generation = aiState.generation;
+  for (let count = 0; count < 30; count++) {
+    if (generation !== aiState.generation) return;
+    try {
+      const job = await api(`/api/imports/excel/jobs/${encodeURIComponent(identifier)}`);
+      if (generation !== aiState.generation) return;
+      $('importJobs').replaceChildren(renderImportJob(job));
+      if (['completed', 'partial_failed', 'failed'].includes(job.status)) {
+        if (job.status !== 'failed') await refresh();
+        return;
+      }
+    } catch (error) { $('importJobs').textContent = authErrorMessage(error); return; }
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+}
+
+async function loadAiActions() {
+  const generation = aiState.generation;
+  const actions = await api('/api/ai/actions');
+  if (generation !== aiState.generation) return;
+  $('aiActions').replaceChildren();
+  for (const action of actions) {
+    const card = document.createElement('details');
+    const heading = document.createElement('summary');
+    heading.textContent = `${action.preview.title} · ${jobStatus[action.status] || action.status} · ${formatDateTime(action.created_at)}`;
+    const detail = document.createElement('pre'); detail.style.whiteSpace = 'pre-wrap';
+    detail.textContent = JSON.stringify({ 操作內容: action.preview.payload,
+      歷程: action.events.map(e => `${jobStatus[e.status] || e.status} ${formatDateTime(e.at)}`),
+      結果: action.result || action.error || '尚無結果' }, null, 2);
+    card.append(heading, detail);
+    if (['draft', 'failed', 'executing'].includes(action.status)) {
+      showDraft(card, { ...action.preview, id: action.id }, generation);
+    }
+    $('aiActions').append(card);
+  }
+  if (!actions.length) $('aiActions').textContent = '尚無 AI 操作紀錄。';
+}
+
+$('importJobsRefresh').addEventListener('click', () => loadImportJobs().catch(error => {
+  $('importJobs').textContent = authErrorMessage(error);
+}));
+$('aiActionsRefresh').addEventListener('click', () => loadAiActions().catch(error => {
+  $('aiActions').textContent = authErrorMessage(error);
+}));
+document.querySelectorAll('[data-retry-operation]').forEach(button => button.addEventListener('click', async () => {
+  const kind = button.dataset.retryOperation;
+  button.disabled = true;
+  try {
+    const result = await retryOperation(kind);
+    setResult(`${kind}Result`, `已確認操作結果：${esc(result.receipt_id || result.adjustment_id)}`);
+    await refresh();
+  } catch (error) { setResult(`${kind}Result`, esc(authErrorMessage(error)), 'error'); }
+  finally { button.disabled = false; }
+}));
+document.querySelectorAll('[data-clear-operation]').forEach(button => button.addEventListener('click', () => {
+  try {
+    if (window.confirm('請先查核帳本，確認上一筆是否已成功。清除後送出將視為新操作，是否繼續？')) {
+      sessionStorage.removeItem(operationStorageKey(button.dataset.clearOperation));
+    }
+  } catch (error) { setResult(`${button.dataset.clearOperation}Result`, esc(error.message), 'error'); }
+}));
+
 function resetAiChat() {
   aiState.history = [];
   aiState.generation += 1;
@@ -572,6 +719,9 @@ function selectWorkspace(ai) {
     $(id).setAttribute('aria-selected', String(selected));
     $(id).tabIndex = selected ? 0 : -1;
   }
+  if (ai && tokenValue()) loadAiActions().catch(error => {
+    $('aiActions').textContent = authErrorMessage(error);
+  });
 }
 
 $('operationsTab').addEventListener('click', () => selectWorkspace(false));
@@ -621,9 +771,14 @@ function showDraft(entry, draft, generation) {
   const cancel = document.createElement('button');
   cancel.type = 'button'; cancel.className = 'button'; cancel.textContent = '取消';
   const result = document.createElement('p');
-  const key = newKey('ai-operation');
-  cancel.addEventListener('click', () => {
-    confirm.disabled = true; cancel.disabled = true; result.textContent = '已取消，未送出。';
+  cancel.addEventListener('click', async () => {
+    if (generation !== aiState.generation) return;
+    confirm.disabled = true; cancel.disabled = true;
+    try {
+      await api(`/api/ai/actions/${encodeURIComponent(draft.id)}/cancel`, { method: 'POST' });
+      if (generation !== aiState.generation) return;
+      result.textContent = '已取消，未送出。'; loadAiActions().catch(() => {});
+    } catch (error) { result.textContent = authErrorMessage(error); confirm.disabled = false; cancel.disabled = false; }
   });
   confirm.addEventListener('click', async () => {
     if (generation !== aiState.generation) return;
@@ -631,12 +786,12 @@ function showDraft(entry, draft, generation) {
     if (!allowed.includes(draft.path) && !/^\/api\/purchase-orders\/[^/]+\/exception-resolution$/.test(draft.path)) return;
     confirm.disabled = true; cancel.disabled = true; result.textContent = '正在送出…';
     try {
-      const data = await api(draft.path, { method: 'POST', body: draft.payload,
-        headers: draft.requires_idempotency ? { 'Idempotency-Key': key } : {} });
+      const data = await api(`/api/ai/actions/${encodeURIComponent(draft.id)}/confirm`, { method: 'POST' });
       if (generation !== aiState.generation) return;
       title.textContent = `${draft.title} · 已完成`;
       result.textContent = JSON.stringify(data, null, 2);
       await refresh();
+      loadAiActions().catch(() => {});
     } catch (error) {
       if (generation !== aiState.generation) return;
       result.textContent = authErrorMessage(error);
@@ -667,6 +822,7 @@ $('aiForm').addEventListener('submit', async event => {
       details.append(summary, data); entry.append(details);
     }
     response.drafts.forEach(draft => showDraft(entry, draft, generation));
+    if (response.drafts.length) loadAiActions().catch(() => {});
     aiState.history.push({ role: 'user', content: message }, { role: 'assistant', content: response.answer.slice(0, 6000) });
     aiState.history = aiState.history.slice(-8);
     $('aiStatus').textContent = '回答已完成。請核對查詢來源與操作內容。';

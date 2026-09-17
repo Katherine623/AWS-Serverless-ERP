@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
@@ -11,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from mangum import Mangum
 
 from app.ai import ChatRequest, ChatResponse, chat, model_id
+from app.ai_actions import cancel_action, execute_action
 from app.auth import Actor, require_roles
 from app.config import get_settings
 from app.erp import (
@@ -59,6 +61,25 @@ def ai_chat(
     actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
 ) -> ChatResponse:
     return chat(request, actor)
+
+
+@app.get("/api/ai/actions")
+def ai_actions(actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))]) -> list[dict]:
+    return store.repository.list_records("ai_action", actor.subject)
+
+
+@app.post("/api/ai/actions/{identifier}/confirm")
+def confirm_ai_action(
+    identifier: str, actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
+) -> dict:
+    return execute_action(identifier, actor)
+
+
+@app.post("/api/ai/actions/{identifier}/cancel")
+def cancel_ai_action(
+    identifier: str, actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
+) -> dict:
+    return cancel_action(identifier, actor)
 
 
 @app.middleware("http")
@@ -244,18 +265,43 @@ def create_excel_upload(
     request: ExcelUploadRequest,
     actor: Annotated[Actor, Depends(require_roles("purchaser", "admin"))],
 ) -> ExcelUploadResponse:
-    del actor
     try:
         object_key, upload_url, expires_in = create_excel_upload_url(request.file_name)
+        job_id = object_key.rsplit("/", 1)[-1].split("-", 1)[0]
+        store.repository.save_record("import", {
+            "id": job_id, "owner": actor.subject, "file_name": request.file_name,
+            "object_key": object_key, "status": "awaiting_upload",
+            "created_at": datetime.now(UTC).isoformat(),
+            "imported": 0, "skipped": 0, "failed": 0, "errors": [],
+        })
         return ExcelUploadResponse(
             object_key=object_key,
             upload_url=upload_url,
             expires_in=expires_in,
+            job_id=job_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/imports/excel/jobs")
+def import_jobs(
+    actor: Annotated[Actor, Depends(require_roles("purchaser", "admin"))],
+) -> list[dict]:
+    return store.repository.list_records("import", actor.subject)
+
+
+@app.get("/api/imports/excel/jobs/{job_id}")
+def import_job(
+    job_id: str,
+    actor: Annotated[Actor, Depends(require_roles("purchaser", "admin"))],
+) -> dict:
+    job = store.repository.get_record("import", job_id)
+    if not job or job["owner"] != actor.subject:
+        raise HTTPException(status_code=404, detail="找不到匯入工作")
+    return job
 
 
 @app.post("/api/purchase-orders/{po_id}/exception-resolution", response_model=PurchaseOrder)
