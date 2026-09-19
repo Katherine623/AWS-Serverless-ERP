@@ -25,16 +25,19 @@ draft = {
 }
 
 
+ASSET_TYPES = {".html": "text/html", ".css": "text/css", ".mjs": "text/javascript"}
+
+
 def route_request(route):
     request = route.request
     url = urlparse(request.url)
     path = url.path
     requests.append(path)
-    if path in {"/", "/app.js"}:
-        filename = "index.html" if path == "/" else "app.js"
+    if path == "/" or path.startswith("/assets/"):
+        name = "index.html" if path == "/" else path.removeprefix("/assets/")
         return route.fulfill(
-            content_type="text/html" if path == "/" else "text/javascript",
-            body=(ROOT / "web" / filename).read_text("utf-8"),
+            content_type=ASSET_TYPES[Path(name).suffix],
+            body=(ROOT / "web" / name).read_text("utf-8"),
         )
     status, data = 200, {}
     if path == "/auth/config":

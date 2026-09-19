@@ -45,6 +45,7 @@ app = FastAPI(
 )
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+ASSET_MEDIA_TYPES = {".mjs": "text/javascript", ".css": "text/css"}
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 logger = logging.getLogger(__name__)
 ERP_READ_ROLES = ("admin", "approver", "purchaser", "warehouse")
@@ -114,13 +115,13 @@ def index() -> FileResponse:
     return FileResponse(WEB_ROOT / "index.html", headers={"Cache-Control": "no-store"})
 
 
-@app.get("/app.js", include_in_schema=False)
-def frontend_script() -> FileResponse:
-    return FileResponse(
-        WEB_ROOT / "app.js",
-        media_type="text/javascript",
-        headers={"Cache-Control": "no-cache"},
-    )
+@app.get("/assets/{name}", include_in_schema=False)
+def frontend_asset(name: str) -> FileResponse:
+    media_type = ASSET_MEDIA_TYPES.get(Path(name).suffix)
+    target = (WEB_ROOT / name).resolve()
+    if media_type is None or target.parent != WEB_ROOT or not target.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return FileResponse(target, media_type=media_type, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/purchase-order-template.xlsx", include_in_schema=False)

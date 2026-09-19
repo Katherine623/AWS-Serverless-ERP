@@ -21,7 +21,7 @@
 - `app/ai.py`：Bedrock 工具迴圈、输入限制、草稿驗證；不執行寫入。
 - `app/erp_tools.py`：共用分頁查詢工具，MCP `query_erp` 與網頁 AI 都使用。
 - `app/main.py`：`GET /api/ai/config`、`POST /api/ai/chat`，要求 ERP 角色。
-- `web/app.js`：對話、來源、确认卡片，確認後呼叫既有 POST API。
+- `web/ai.mjs`：對話、來源、確認卡片，確認後呼叫既有 POST API。
 - `app/mcp_server.py`：仍保留 stdio MCP；網頁後端直接使用共用工具，不啟動 stdio 子程序。
 
 ## 設定與限制

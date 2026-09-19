@@ -441,9 +441,9 @@ resource "aws_apigatewayv2_route" "index" {
   authorization_type = "NONE"
 }
 
-resource "aws_apigatewayv2_route" "frontend_script" {
+resource "aws_apigatewayv2_route" "frontend_assets" {
   api_id             = aws_apigatewayv2_api.http.id
-  route_key          = "GET /app.js"
+  route_key          = "GET /assets/{proxy+}"
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
   authorization_type = "NONE"
 }
@@ -583,13 +583,17 @@ resource "aws_s3_object" "frontend_index" {
   content_type = "text/html; charset=utf-8"
 }
 
-resource "aws_s3_object" "frontend_app" {
-  count        = var.enable_frontend_cdn ? 1 : 0
+resource "aws_s3_object" "frontend_assets" {
+  for_each = var.enable_frontend_cdn ? setunion(
+    fileset("${path.module}/../web", "*.mjs"),
+    fileset("${path.module}/../web", "*.css"),
+  ) : toset([])
+
   bucket       = aws_s3_bucket.frontend[0].id
-  key          = "app.js"
-  source       = "${path.module}/../web/app.js"
-  etag         = filemd5("${path.module}/../web/app.js")
-  content_type = "text/javascript; charset=utf-8"
+  key          = "assets/${each.value}"
+  source       = "${path.module}/../web/${each.value}"
+  etag         = filemd5("${path.module}/../web/${each.value}")
+  content_type = endswith(each.value, ".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8"
 }
 
 resource "aws_s3_object" "purchase_order_template" {

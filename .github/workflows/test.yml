@@ -27,7 +27,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: testing
           AWS_DEFAULT_REGION: ap-northeast-1
           AWS_EC2_METADATA_DISABLED: "true"
-      - run: node --check web/app.js
+      - run: for file in web/*.mjs; do node --check "$file"; done
       - run: bash scripts/build_lambda.sh
       - run: terraform fmt -check
         working-directory: infra
