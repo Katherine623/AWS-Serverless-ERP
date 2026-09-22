@@ -1,6 +1,6 @@
 import pytest
 
-from app.erp import ErpStore, InventoryTransaction
+from app.erp import ErpStore, InventoryAdjustmentRequest, InventoryTransaction
 from app.repository import DynamoDbRepository, InMemoryRepository, _encode_cursor
 
 
@@ -94,3 +94,30 @@ def test_inventory_and_transaction_filters_are_applied() -> None:
         transaction_type="報廢",
     )
     assert [item.transaction_id for item in transactions] == ["INV-FILTER"]
+
+
+def test_inventory_transaction_pages_run_newest_first() -> None:
+    store = ErpStore(repository=InMemoryRepository())
+    for index in range(4):
+        store.adjust_inventory(
+            InventoryAdjustmentRequest.model_validate(
+                {
+                    "material_id": "MAT-1001",
+                    "quantity_change": -1,
+                    "adjustment_type": "盤點調整",
+                    "reason": f"第 {index} 次盤點",
+                }
+            ),
+            f"ledger-order-{index}",
+        )
+    seen = []
+    cursor = None
+    while True:
+        items, cursor = store.repository.list_inventory_transactions_page(2, cursor)
+        seen.extend(items)
+        if not cursor:
+            break
+
+    occurred = [item.occurred_at for item in seen]
+    assert len(seen) == 4
+    assert occurred == sorted(occurred, reverse=True)

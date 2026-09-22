@@ -18,6 +18,16 @@ export function authErrorMessage(error) {
   return error.message || 'API 請求失敗，請稍後再試。';
 }
 
+// FastAPI returns a string for raised HTTPExceptions but a list for schema validation.
+function detailMessage(detail) {
+  if (typeof detail === 'string') return detail;
+  if (!Array.isArray(detail)) return '';
+  return detail
+    .map(item => String(item?.msg || '').replace(/^Value error,\s*/, ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
 function failure(message, status) {
   const error = new Error(message);
   error.status = status;
@@ -55,7 +65,7 @@ export async function api(path, options = {}) {
     if (response.status === 401 && !options.retryAuth && (await refreshSession())) {
       return api(path, { ...options, retryAuth: true });
     }
-    throw failure(data.detail || data.message || `API 請求失敗（${response.status}）`, response.status);
+    throw failure(detailMessage(data.detail) || data.message || `API 請求失敗（${response.status}）`, response.status);
   } catch (error) {
     if (error.name === 'AbortError') throw failure('API 請求逾時，請稍後再試', 408);
     throw error;

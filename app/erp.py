@@ -76,6 +76,8 @@ class CreatePurchaseOrderRequest(BaseModel):
     po_id: str = Field(min_length=1, max_length=80)
     supplier_name: str = Field(min_length=1, max_length=160)
     expected_date: date
+    # 48 items keeps receiving inside the 100-action TransactWriteItems limit:
+    # each item writes inventory + ledger (48*2) plus receipt, PO, idempotency and alert outbox.
     items: list[CreatePurchaseOrderItem] = Field(min_length=1, max_length=48)
 
     @model_validator(mode="after")
@@ -95,6 +97,7 @@ class ReceiptRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     po_id: str = Field(min_length=1, max_length=80)
+    # Mirrors CreatePurchaseOrderRequest: the 100-action DynamoDB transaction limit.
     items: list[ReceiptItem] = Field(min_length=1, max_length=48)
     received_by: str = Field(default="warehouse-user", min_length=1, max_length=120)
 
@@ -173,6 +176,7 @@ class InventoryTransaction(BaseModel):
     quarantine_quantity_change: int = 0
     transaction_type: str = "收料"
     reference_id: str
+    reason: str | None = None
     performed_by: str
     occurred_at: datetime
 
@@ -401,6 +405,7 @@ class ErpStore:
                 quantity_change=request.quantity_change,
                 transaction_type=request.adjustment_type,
                 reference_id=adjustment_id,
+                reason=request.reason,
                 performed_by=request.performed_by,
                 occurred_at=occurred_at,
             )
@@ -506,10 +511,11 @@ class ErpStore:
                 quantity = received[material_id]
                 remaining = item.ordered_quantity - item.received_quantity
                 accepted_quantity = min(quantity, max(remaining, 0))
+                # Only the excess delivered now counts; an earlier overage is already recorded.
                 quarantine_quantity = quantity - accepted_quantity
-                if quantity > remaining:
+                if quarantine_quantity:
                     exceptions.append(
-                        f"{item.material_name} 超收 {quantity - remaining} {item.unit}"
+                        f"{item.material_name} 超收 {quarantine_quantity} {item.unit}"
                     )
                 item.received_quantity += quantity
                 if item.received_quantity < item.ordered_quantity:
@@ -674,6 +680,7 @@ class ErpStore:
                             quantity_change=overage,
                             transaction_type="差異允收",
                             reference_id=po_id,
+                            reason=request.note,
                             performed_by=request.resolved_by,
                             occurred_at=updated_order.exception_resolved_at,
                         )

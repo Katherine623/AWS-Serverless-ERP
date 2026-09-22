@@ -50,6 +50,14 @@ fi
 cp -R "$PROJECT_ROOT/app" "$STAGING_DIR/app"
 cp -R "$PROJECT_ROOT/web" "$STAGING_DIR/web"
 
+# Terraform compares this stamp against the sources so a stale zip fails the plan.
+{
+  find "$PROJECT_ROOT/app" -name '*.py' -type f -printf 'app/%P\n'
+  echo 'requirements-lambda.txt'
+} | LC_ALL=C sort | while IFS= read -r rel; do
+  printf '%s:%s\n' "$rel" "$(sha256sum "$PROJECT_ROOT/$rel" | cut -d' ' -f1)"
+done | sha256sum | cut -d' ' -f1 > "$STAGING_DIR/source.sha256"
+
 BUILD_DIR="$STAGING_DIR" ZIP_PATH="$STAGING_DIR/lambda.zip" "$PYTHON_BIN" - <<'PY'
 import os
 from pathlib import Path

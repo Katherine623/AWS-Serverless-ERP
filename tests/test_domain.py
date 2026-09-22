@@ -180,3 +180,56 @@ def test_inventory_adjustment_is_atomic_and_idempotent() -> None:
             request.model_copy(update={"quantity_change": -30}),
             "adjustment-001",
         )
+
+
+def test_replenishment_receipt_does_not_replay_an_earlier_overage() -> None:
+    store = make_store()
+    store.create_purchase_order(
+        CreatePurchaseOrderRequest.model_validate(
+            {
+                "po_id": "PO-MIXED-001",
+                "supplier_name": "供應商",
+                "expected_date": "2026-09-30",
+                "items": [
+                    {"material_id": "MIX-A", "material_name": "A 件", "ordered_quantity": 100},
+                    {"material_id": "MIX-B", "material_name": "B 件", "ordered_quantity": 50},
+                ],
+            }
+        )
+    )
+    first = store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "PO-MIXED-001",
+                "items": [
+                    {"material_id": "MIX-A", "received_quantity": 80},
+                    {"material_id": "MIX-B", "received_quantity": 60},
+                ],
+            }
+        ),
+        "mixed-receipt-001",
+    )
+    store.resolve_exception(
+        "PO-MIXED-001",
+        ResolveExceptionRequest.model_validate(
+            {"action": "補貨", "resolved_by": "approver", "note": "補足短缺"}
+        ),
+    )
+    second = store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "PO-MIXED-001",
+                "items": [
+                    {"material_id": "MIX-A", "received_quantity": 20},
+                    {"material_id": "MIX-B", "received_quantity": 0},
+                ],
+            }
+        ),
+        "mixed-receipt-002",
+    )
+    inventory = {item.material_id: item for item in store.list_inventory()}
+
+    assert first.exceptions == ["A 件 尚待補貨 20 pcs", "B 件 超收 10 pcs"]
+    assert second.exceptions == []
+    assert second.status == "已完成"
+    assert inventory["MIX-B"].quarantine_quantity == 10

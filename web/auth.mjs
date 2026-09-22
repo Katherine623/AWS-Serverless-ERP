@@ -44,6 +44,9 @@ export function claimRoles(claims) {
 
 export function renderActor() {
   const token = tokenValue();
+  // An expired token must still offer login, otherwise the user cannot re-authenticate.
+  $('loginButton').hidden = Boolean(token) && !tokenExpired(token);
+  $('logoutButton').hidden = !token;
   if (!token) {
     $('actorBadge').textContent = '尚未登入';
     $('roleBadges').replaceChildren(el('span', { className: 'badge warn', textContent: '請先登入' }));

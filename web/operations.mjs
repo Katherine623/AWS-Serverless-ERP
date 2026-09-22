@@ -5,15 +5,19 @@ import { $, el, formatDateTime, newKey, replaceRows, setResult } from './ui.mjs'
 const RECEIVABLE_STATUSES = ['待驗收', '待補貨'];
 const ACTION_STATUSES = ['待驗收', '待補貨', '待處理異常'];
 const PENDING_KINDS = ['receipt', 'adjustment'];
+// Statuses that prove the request was rejected before it could touch the ledger.
+const REJECTED_BEFORE_WRITE = [400, 401, 403, 404, 422];
 
 const JOB_STATUS = {
   awaiting_upload: '等待上傳',
+  upload_expired: '上傳逾期',
   processing: '處理中',
   completed: '完成',
   partial_failed: '部分資料失敗',
-  failed: '失敗／等待重試',
+  failed: '失敗',
+  timed_out: '處理逾時',
   draft: '待確認',
-  executing: '執行中／結果待確認',
+  executing: '執行中',
   cancelled: '已取消',
 };
 
@@ -50,15 +54,18 @@ async function submitOperation(kind, path, body) {
   const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
   const fingerprint = JSON.stringify(body);
   if (saved && saved.fingerprint !== fingerprint) {
-    throw new Error('上一筆操作結果尚未確認。請先重送上一筆，或查核帳本後清除待確認操作。');
+    throw new Error('上一筆操作是否完成尚未確認。請先重新送出上一筆，或核對帳本後清除。');
   }
   const operation = saved || { path, body, fingerprint, key: newKey(kind) };
+  // Recorded before sending for crash safety, but only surfaced once the outcome is unknown.
   sessionStorage.setItem(storageKey, JSON.stringify(operation));
-  syncPendingBars();
   try {
     const result = await api(path, { method: 'POST', body, headers: { 'Idempotency-Key': operation.key } });
     sessionStorage.removeItem(storageKey);
     return result;
+  } catch (error) {
+    if (REJECTED_BEFORE_WRITE.includes(error.status)) sessionStorage.removeItem(storageKey);
+    throw error;
   } finally {
     syncPendingBars();
   }
@@ -192,6 +199,9 @@ function renderOrders(items) {
     items.map(order => {
       const ordered = order.items.reduce((total, item) => total + item.ordered_quantity, 0);
       const received = order.items.reduce((total, item) => total + item.received_quantity, 0);
+      // Only label the total when every item shares one unit, otherwise the sum is meaningless.
+      const units = new Set(order.items.map(item => item.unit || 'pcs'));
+      const progress = units.size === 1 ? `${received} / ${ordered} ${[...units][0]}` : `${received} / ${ordered}`;
       return el(
         'tr',
         {},
@@ -199,7 +209,7 @@ function renderOrders(items) {
         el('td', { textContent: order.supplier_name }),
         el('td', { textContent: order.expected_date }),
         el('td', {}, renderOrderStatus(order)),
-        el('td', { textContent: `${received} / ${ordered} ${order.items[0]?.unit || 'pcs'}` }),
+        el('td', { textContent: progress }),
       );
     }),
     5,
@@ -253,6 +263,7 @@ function renderTransactions(items) {
     ...(sorted.length
       ? sorted.map(transaction => {
           const positive = transaction.quantity_change >= 0;
+          const quarantine = Number(transaction.quarantine_quantity_change || 0);
           return el(
             'div',
             { className: 'transaction' },
@@ -268,11 +279,24 @@ function renderTransactions(items) {
                 className: 'transaction-meta',
                 textContent: `${transaction.material_id} · ${transaction.reference_id} · ${transaction.performed_by} · ${formatDateTime(transaction.occurred_at)}`,
               }),
+              transaction.reason
+                ? el('div', { className: 'transaction-meta', textContent: `理由：${transaction.reason}` })
+                : null,
             ),
-            el('span', {
-              className: `amount ${positive ? 'positive' : 'negative'}`,
-              textContent: `${positive ? '+' : ''}${transaction.quantity_change}`,
-            }),
+            el(
+              'div',
+              { className: 'transaction-amounts' },
+              el('span', {
+                className: `amount ${positive ? 'positive' : 'negative'}`,
+                textContent: `${positive ? '+' : ''}${transaction.quantity_change}`,
+              }),
+              quarantine
+                ? el('span', {
+                    className: 'badge warn',
+                    textContent: `隔離 ${quarantine > 0 ? '+' : ''}${quarantine}`,
+                  })
+                : null,
+            ),
           );
         })
       : [el('div', { className: 'empty', textContent: '尚無庫存異動' })]),
@@ -321,7 +345,7 @@ function populateActions() {
   $('receiptPo').replaceChildren(
     ...(receivable.length
       ? receivable.map(order => option(order.po_id, `${order.po_id} · ${order.supplier_name} · ${order.status}`))
-      : [option('', '目前沒有可收料 PO')]),
+      : [option('', '目前沒有可驗收的採購單')]),
   );
   $('resolutionPo').replaceChildren(
     ...(exceptions.length
@@ -338,6 +362,7 @@ function populateActions() {
 
   $('receiptSubmit').disabled = !receivable.length;
   $('resolutionSubmit').disabled = !exceptions.length;
+  $('adjustmentSubmit').disabled = !state.inventory.length;
   if (receivable.some(order => order.po_id === selected.receipt)) $('receiptPo').value = selected.receipt;
   if (exceptions.some(order => order.po_id === selected.resolution)) $('resolutionPo').value = selected.resolution;
   if (state.inventory.some(item => item.material_id === selected.material)) {
@@ -349,7 +374,7 @@ function populateActions() {
 function renderReceiptItems() {
   const order = state.allOrders.find(item => item.po_id === $('receiptPo').value);
   if (!order) {
-    $('receiptItems').replaceChildren(el('p', { className: 'help', textContent: '請先建立或載入可收料 PO。' }));
+    $('receiptItems').replaceChildren(el('p', { className: 'help', textContent: '目前沒有可驗收的採購單。' }));
     return;
   }
   $('receiptItems').replaceChildren(
@@ -403,12 +428,15 @@ function renderImportJob(job) {
   const errors = (job.errors || [])
     .map(error => `${error.row ? `第 ${error.row} 列 ` : ''}${error.po_id || ''} ${error.message}`)
     .join('\n');
-  return el('div', {
-    className: 'chat-message',
-    textContent:
-      `${job.file_name || job.object_key} · ${jobStatusLabel(job.status)}\n` +
-      `新增 ${job.imported || 0} 張，略過 ${job.skipped || 0} 張，失敗 ${job.failed || 0} 筆\n${errors}`,
-  });
+  // A job that never reached the parser has no counts worth showing.
+  const parsed = ['completed', 'partial_failed'].includes(job.status)
+    || Boolean(job.imported || job.skipped || job.failed);
+  const lines = [`${job.file_name || job.object_key} · ${jobStatusLabel(job.status)}`];
+  if (parsed) {
+    lines.push(`新增 ${job.imported || 0} 張，略過 ${job.skipped || 0} 張，失敗 ${job.failed || 0} 筆`);
+  }
+  if (errors) lines.push(errors);
+  return el('div', { className: 'chat-message', textContent: lines.join('\n') });
 }
 
 async function loadImportJobs() {
@@ -422,14 +450,16 @@ async function loadImportJobs() {
 
 async function watchImport(identifier) {
   const generation = session.generation;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  // Watch past the worker lease (300s) so a Lambda timeout surfaces as timed_out.
+  const deadline = Date.now() + 330000;
+  while (Date.now() < deadline) {
     if (generation !== session.generation) return;
     try {
       const job = await api(`/api/imports/excel/jobs/${encodeURIComponent(identifier)}`);
       if (generation !== session.generation) return;
       $('importJobs').replaceChildren(renderImportJob(job));
-      if (['completed', 'partial_failed', 'failed'].includes(job.status)) {
-        if (job.status !== 'failed') await refresh();
+      if (['completed', 'partial_failed', 'failed', 'timed_out', 'upload_expired'].includes(job.status)) {
+        if (!['failed', 'timed_out', 'upload_expired'].includes(job.status)) await refresh();
         return;
       }
     } catch (error) {
@@ -438,6 +468,10 @@ async function watchImport(identifier) {
     }
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
+  if (generation !== session.generation) return;
+  $('importJobs').replaceChildren(
+    el('p', { className: 'help', textContent: '匯入仍在處理中，已停止自動更新。請稍後按「重新整理」查看結果。' }),
+  );
 }
 
 export async function refresh() {
@@ -448,6 +482,7 @@ export async function refresh() {
     setResult('authResult', '請使用 Cognito 登入，再載入 ERP 資料。', 'error');
     return;
   }
+  renderActor();
   try {
     const [dashboard] = await Promise.all([
       api('/api/dashboard'),
@@ -674,11 +709,13 @@ function bindEvents() {
           method: 'PUT',
           headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
           body: file,
+        }).catch(() => {
+          throw new Error('無法上傳到儲存體，請確認網路後重試。');
         });
-        if (!upload.ok) throw new Error(`S3 上傳失敗（${upload.status}）`);
+        if (!upload.ok) throw new Error(`檔案上傳失敗（${upload.status}），請稍後重試。`);
         setResult(
           'importResult',
-          `檔案已送入匯入佇列：${response.object_key}\nworker 會非同步建立 PO；重複相同定義會自動略過。`,
+          `${file.name} 已上傳，正在匯入。\n內容完全相同的採購單會自動略過。`,
         );
         form.reset();
         $('fileName').textContent = '尚未選擇檔案';
@@ -708,7 +745,7 @@ function bindEvents() {
     button.addEventListener('click', () => {
       const kind = button.dataset.clearOperation;
       try {
-        if (window.confirm('請先查核帳本，確認上一筆是否已成功。清除後送出將視為新操作，是否繼續？')) {
+        if (window.confirm('請先核對帳本，確認上一筆是否已成功。清除後再送出會視為新的一筆，確定繼續？')) {
           sessionStorage.removeItem(operationStorageKey(kind));
           syncPendingBars();
         }

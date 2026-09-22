@@ -137,7 +137,11 @@ def test_excel_upload_url_is_scoped_to_xlsx_object(monkeypatch) -> None:
         "get_settings",
         lambda: SimpleNamespace(import_bucket_name="imports-bucket"),
     )
-    monkeypatch.setattr(imports.boto3, "client", lambda service: FakeS3())
+    monkeypatch.setattr(
+        imports.boto3,
+        "client",
+        lambda service, config=None: FakeS3(),
+    )
 
     key, url, expires = imports.create_excel_upload_url("warehouse stock.xlsx")
 

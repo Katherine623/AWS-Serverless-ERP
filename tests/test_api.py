@@ -1,8 +1,12 @@
+import time
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.alerts import AlertEvent
 from app.erp import ErpStore, IdempotencyConflictError, ReceiptRequest
+from app.imports import UPLOAD_URL_TTL_SECONDS
 from app.main import app, store
 from app.repository import InMemoryRepository
 
@@ -366,3 +370,61 @@ def test_receiving_all_zero_quantities_is_rejected() -> None:
     )
 
     assert response.status_code == 422
+
+
+def save_import_job(job_id: str, lease_until: float) -> None:
+    store.repository.save_record("import", {
+        "id": job_id,
+        "owner": "local-user",
+        "file_name": "orders.xlsx",
+        "object_key": f"incoming/{job_id}-orders.xlsx",
+        "status": "processing",
+        "created_at": "2026-09-22T00:00:00+00:00",
+        "lease_until": lease_until,
+        "imported": 0, "skipped": 0, "failed": 0, "errors": [],
+    })
+
+
+def test_import_job_with_expired_lease_is_reported_as_timed_out() -> None:
+    reset_store()
+    save_import_job("timeout-job", time.time() - 1)
+
+    job = client.get("/api/imports/excel/jobs/timeout-job")
+    listed = client.get("/api/imports/excel/jobs")
+
+    assert job.status_code == 200
+    assert job.json()["status"] == "timed_out"
+    assert "拆成較小的檔案" in job.json()["errors"][0]["message"]
+    assert listed.json()[0]["status"] == "timed_out"
+    # The derived status must not be written back, so retries stay possible.
+    assert store.repository.get_record("import", "timeout-job")["status"] == "processing"
+
+
+def test_import_job_within_lease_stays_processing() -> None:
+    reset_store()
+    save_import_job("running-job", time.time() + 300)
+
+    job = client.get("/api/imports/excel/jobs/running-job")
+
+    assert job.status_code == 200
+    assert job.json()["status"] == "processing"
+
+
+def test_import_job_awaiting_upload_expires_after_the_presigned_url() -> None:
+    reset_store()
+    fresh = datetime.now(UTC).isoformat()
+    stale = (datetime.now(UTC) - timedelta(seconds=UPLOAD_URL_TTL_SECONDS + 60)).isoformat()
+    for job_id, created_at in [("fresh-upload", fresh), ("stale-upload", stale)]:
+        store.repository.save_record("import", {
+            "id": job_id, "owner": "local-user", "file_name": "orders.xlsx",
+            "object_key": f"incoming/{job_id}-orders.xlsx", "status": "awaiting_upload",
+            "created_at": created_at,
+            "imported": 0, "skipped": 0, "failed": 0, "errors": [],
+        })
+
+    fresh_job = client.get("/api/imports/excel/jobs/fresh-upload").json()
+    stale_job = client.get("/api/imports/excel/jobs/stale-upload").json()
+
+    assert fresh_job["status"] == "awaiting_upload"
+    assert stale_job["status"] == "upload_expired"
+    assert "重新上傳" in stale_job["errors"][0]["message"]

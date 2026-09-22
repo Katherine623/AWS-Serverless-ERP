@@ -15,7 +15,7 @@
       <div>
         <div class="eyebrow">AWS SERVERLESS ERP / OPERATIONS CONTROL PLANE</div>
         <h1>採購與庫存作業台</h1>
-        <p class="subtitle">一個畫面追蹤 PO、收料例外、可用庫存、隔離庫存與稽核帳本。</p>
+        <p class="subtitle">追蹤採購單、到貨驗收、庫存水位與異動紀錄。</p>
       </div>
       <div class="top-actions">
         <div class="health">
@@ -33,7 +33,7 @@
           <span id="actorBadge" class="badge">尚未登入</span>
           <span id="roleBadges"></span>
         </div>
-        <p class="panel-note">角色由 Cognito JWT 提供；實際權限由 API Gateway 與後端 role guard 驗證。</p>
+        <p class="panel-note">不同角色可執行的作業不同，每張表單右上角標示所需角色。</p>
       </div>
       <div class="security-actions">
         <button id="loginButton" class="button small primary" type="button" disabled>使用 Cognito 登入</button>
@@ -63,7 +63,7 @@
             <div class="panel-head">
               <div>
                 <h2>採購單工作佇列</h2>
-                <p class="panel-note">依狀態與供應商篩選；cursor 會綁定目前條件。異常狀態可移入查看原因與處置說明。</p>
+                <p class="panel-note">狀態為「待處理異常」時，將游標移到狀態上可查看原因。</p>
               </div>
               <span id="orderCount" class="badge">—</span>
             </div>
@@ -104,7 +104,7 @@
             <div class="panel-head">
               <div>
                 <h2>庫存水位</h2>
-                <p class="panel-note">可用量與隔離量分開；低於安全庫存會觸發警示。</p>
+                <p class="panel-note">隔離量是超收待確認的數量，需經異常處置允收後才會併入可用量。</p>
               </div>
               <span id="inventoryCount" class="badge">—</span>
             </div>
@@ -138,7 +138,7 @@
             <div class="panel-head">
               <div>
                 <h2>庫存稽核帳本</h2>
-                <p class="panel-note">收料、差異允收、盤點調整、退貨與報廢都保留來源；當頁依時間排序，KPI 最多快取 20 秒。</p>
+                <p class="panel-note">所有庫存異動的完整紀錄，依異動時間由新到舊排序。</p>
               </div>
             </div>
             <div id="transactions" class="transaction-list">
@@ -160,7 +160,7 @@
             <div class="panel-head">
               <div>
                 <h2>建立採購單</h2>
-                <p class="panel-note">新 PO 會立即進入待驗收工作佇列。</p>
+                <p class="panel-note">建立後立即進入待驗收佇列。</p>
               </div>
               <span class="badge">purchaser</span>
             </div>
@@ -184,12 +184,12 @@
             <div class="panel-head">
               <div>
                 <h2>到貨驗收</h2>
-                <p class="panel-note">重送相同 Idempotency-Key 不會重複入帳。</p>
+                <p class="panel-note">填寫本次實收數量；重複送出不會重複入帳。</p>
               </div>
               <span class="badge">warehouse</span>
             </div>
             <form id="receiptForm" class="form">
-              <label for="receiptPo">選擇可收料 PO</label>
+              <label for="receiptPo">選擇要驗收的採購單</label>
               <select id="receiptPo" required></select>
               <div id="receiptItems"></div>
               <div class="form-actions">
@@ -197,12 +197,12 @@
               </div>
             </form>
             <div class="toolbar">
-              <button id="actionMore" class="button small" type="button" hidden>載入更多可操作採購單</button>
+              <button id="actionMore" class="button small" type="button" hidden>載入更多採購單</button>
             </div>
             <div id="receiptPending" class="toolbar pending-bar" hidden>
-              <span>上一筆驗收結果尚未確認</span>
-              <button type="button" class="button small" data-retry-operation="receipt">重送</button>
-              <button type="button" class="button small" data-clear-operation="receipt">查核後清除</button>
+              <span>上一筆驗收是否完成尚未確認</span>
+              <button type="button" class="button small" data-retry-operation="receipt">重新送出</button>
+              <button type="button" class="button small" data-clear-operation="receipt">確認帳本後清除</button>
             </div>
             <div id="receiptResult" class="result" role="status" hidden></div>
           </section>
@@ -211,12 +211,12 @@
             <div class="panel-head">
               <div>
                 <h2>異常處置</h2>
-                <p class="panel-note">補貨或差異允收；超收隔離量只會在允收後釋放。</p>
+                <p class="panel-note">選「補貨」會回到待收料；選「差異允收結案」會把超收的隔離量併入可用庫存。</p>
               </div>
               <span class="badge warn">approver</span>
             </div>
             <form id="resolutionForm" class="form">
-              <label for="resolutionPo">待處理異常 PO</label>
+              <label for="resolutionPo">待處理異常的採購單</label>
               <select id="resolutionPo" required></select>
               <label for="resolutionAction">處置方式</label>
               <select id="resolutionAction">
@@ -236,7 +236,7 @@
             <div class="panel-head">
               <div>
                 <h2>庫存調整 / 退貨 / 報廢</h2>
-                <p class="panel-note">每次異動都需要理由與 Idempotency-Key。</p>
+                <p class="panel-note">每筆異動都需填寫理由，並會記入稽核帳本。</p>
               </div>
               <span class="badge warn">approver</span>
             </div>
@@ -255,13 +255,13 @@
                 <div class="full"><label for="adjustmentReason">異動理由</label><textarea id="adjustmentReason" maxlength="500" required></textarea></div>
               </div>
               <div class="form-actions">
-                <button class="button primary" type="submit">寫入庫存帳本</button>
+                <button id="adjustmentSubmit" class="button primary" type="submit">寫入庫存帳本</button>
               </div>
             </form>
             <div id="adjustmentPending" class="toolbar pending-bar" hidden>
-              <span>上一筆庫存異動結果尚未確認</span>
-              <button type="button" class="button small" data-retry-operation="adjustment">重送</button>
-              <button type="button" class="button small" data-clear-operation="adjustment">查核後清除</button>
+              <span>上一筆庫存異動是否完成尚未確認</span>
+              <button type="button" class="button small" data-retry-operation="adjustment">重新送出</button>
+              <button type="button" class="button small" data-clear-operation="adjustment">確認帳本後清除</button>
             </div>
             <div id="adjustmentResult" class="result" role="status" hidden></div>
           </section>
@@ -270,7 +270,7 @@
             <div class="panel-head">
               <div>
                 <h2>Excel 採購單匯入</h2>
-                <p class="panel-note">取得 S3 預簽名網址，完成後由 SQS worker 非同步匯入。</p>
+                <p class="panel-note">一次建立多張採購單；上傳後在背景匯入，進度顯示於下方。</p>
               </div>
               <div class="panel-head-actions">
                 <a class="button small secondary" href="/purchase-order-template.xlsx" download>下載 Excel 範例</a>
@@ -281,14 +281,14 @@
               <label for="excelFile">選擇 .xlsx 檔案</label>
               <input id="excelFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
               <div id="fileName" class="file-name">尚未選擇檔案</div>
-              <p class="help">下載範例後請刪除示範資料列，只保留第一列欄位名稱再填寫；同一個 po_id 可填多列料號。必要欄位：po_id、supplier_name、expected_date（YYYY-MM-DD）、material_id、material_name、ordered_quantity；unit 可選。</p>
+              <p class="help">請先下載範例，刪除示範資料列後再填寫；同一張採購單可填多列料號。必填欄位：po_id、supplier_name、expected_date（YYYY-MM-DD）、material_id、material_name、ordered_quantity。</p>
               <div class="form-actions">
-                <button class="button secondary" type="submit">取得上傳網址並送出</button>
+                <button class="button secondary" type="submit">上傳並匯入</button>
               </div>
             </form>
             <div id="importResult" class="result" role="status" hidden></div>
             <div class="form">
-              <p class="help">上限：10 MB、2,000 列。每張 PO 資料須一致；送出後會自動追蹤進度，重新整理顯示最近 20 筆紀錄。</p>
+              <p class="help">上限 10 MB、2,000 列。</p>
               <div id="importJobs" aria-live="polite"></div>
             </div>
           </section>
@@ -300,12 +300,12 @@
       <div class="panel-head">
         <div>
           <h2>ERP AI 助理</h2>
-          <p class="panel-note">用對話查詢採購與庫存。操作草稿由你核對確認後送出。</p>
+          <p class="panel-note">用對話查詢採購與庫存。需要異動資料時會先產生草稿，經你確認才送出。</p>
         </div>
         <button id="aiClear" class="button small" type="button">清除對話</button>
       </div>
       <details class="form">
-        <summary>我的 AI 操作紀錄（最近 20 筆）</summary>
+        <summary>我的 AI 操作紀錄</summary>
         <div id="aiActions"></div>
       </details>
       <div class="toolbar" aria-label="建議問題">
@@ -314,11 +314,18 @@
         <button class="button small secondary ai-suggestion" type="button">說明目前營運指標</button>
       </div>
       <div id="aiLog" class="chat-log" role="log" aria-live="polite" aria-label="AI 對話">
-        <p class="help">登入後即可提問。回答會附上查詢來源；本頁對話重新整理後即清除。</p>
+        <p class="help">登入後即可提問。重新整理頁面後對話會清除。</p>
       </div>
       <form id="aiForm" class="form">
         <label for="aiMessage">想了解或處理什麼？</label>
         <textarea id="aiMessage" maxlength="2000" required placeholder="例如：查詢 MAT-1001 的庫存，並說明是否需要補貨"></textarea>
+        <div class="toolbar" aria-label="語音輸入">
+          <button id="aiVoice" class="button small secondary" type="button">語音輸入</button>
+          <button id="aiVoicePoMode" class="button small secondary" type="button">語音建立採購單</button>
+          <label class="check"><input id="aiVoiceAutoSend" type="checkbox" checked> 說完自動送出</label>
+        </div>
+        <p id="aiVoiceStatus" class="help" role="status">按下按鈕後直接說出需求，內容會填進上方輸入框。</p>
+        <p id="aiVoiceChecklist" class="help">選「語音建立採購單」會檢查採購單編號、供應商、預計到貨日、料號、品名、數量是否齊全。</p>
         <div class="form-actions">
           <button id="aiSend" class="button primary" type="submit">送出問題</button>
         </div>

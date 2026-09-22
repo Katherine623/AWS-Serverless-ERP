@@ -24,6 +24,31 @@ locals {
   jwt_audience             = var.manage_cognito_user_pool ? local.managed_cognito_audience : var.cognito_audience
   public_base_url          = var.enable_frontend_cdn ? "https://${aws_cloudfront_distribution.frontend[0].domain_name}" : aws_apigatewayv2_api.http.api_endpoint
   upload_cors_origins      = var.enable_frontend_cdn ? [local.public_base_url] : var.cors_allowed_origins
+
+  lambda_source_files = sort(concat(
+    [for file in fileset("${path.module}/../app", "**/*.py") : "app/${file}"],
+    ["requirements-lambda.txt"],
+  ))
+  lambda_source_hash = sha256(join("", [
+    for file in local.lambda_source_files :
+    "${file}:${filesha256("${path.module}/../${file}")}\n"
+  ]))
+  lambda_package_hash = trimspace(try(file("${path.module}/.lambda-build/source.sha256"), ""))
+
+  # The browser uploads XLSX straight to S3, so the bucket must be an allowed connect target.
+  import_upload_origin = var.enable_excel_import ? " https://${aws_s3_bucket.imports[0].bucket_regional_domain_name}" : ""
+}
+
+# Terraform only hashes lambda.zip, so nothing else would notice edited app/*.py.
+resource "terraform_data" "lambda_package" {
+  input = local.lambda_source_hash
+
+  lifecycle {
+    precondition {
+      condition     = local.lambda_package_hash == local.lambda_source_hash
+      error_message = "infra/.lambda-build/lambda.zip is stale or unstamped. Run `bash scripts/build_lambda.sh` before apply."
+    }
+  }
 }
 
 resource "aws_cognito_user_pool" "erp" {
@@ -48,6 +73,10 @@ resource "aws_cognito_user_pool" "erp" {
   }
 
   tags = var.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_cognito_user_pool_client" "erp" {
@@ -153,6 +182,10 @@ resource "aws_dynamodb_table" "erp" {
   }
 
   tags = var.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_iam_role" "lambda" {
@@ -274,7 +307,7 @@ resource "aws_lambda_function" "api" {
   memory_size      = 512
   timeout          = 30
   tags             = var.tags
-  depends_on       = [aws_cloudwatch_log_group.api]
+  depends_on       = [aws_cloudwatch_log_group.api, terraform_data.lambda_package]
 
   environment {
     variables = {
@@ -306,7 +339,7 @@ resource "aws_lambda_function" "alert_worker" {
   memory_size      = 256
   timeout          = 30
   tags             = var.tags
-  depends_on       = [aws_cloudwatch_log_group.alert_worker]
+  depends_on       = [aws_cloudwatch_log_group.alert_worker, terraform_data.lambda_package]
 
   environment {
     variables = {
@@ -335,7 +368,7 @@ resource "aws_lambda_function" "import_worker" {
   memory_size      = 512
   timeout          = 240
   tags             = var.tags
-  depends_on       = [aws_cloudwatch_log_group.import_worker]
+  depends_on       = [aws_cloudwatch_log_group.import_worker, terraform_data.lambda_package]
 
   environment {
     variables = {
@@ -518,6 +551,10 @@ resource "aws_s3_bucket" "frontend" {
   bucket_prefix = "${var.project_name}-frontend-"
   force_destroy = var.frontend_force_destroy
   tags          = var.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "frontend" {
@@ -620,7 +657,7 @@ resource "aws_cloudfront_response_headers_policy" "frontend_security" {
 
   security_headers_config {
     content_security_policy {
-      content_security_policy = "default-src 'self'; connect-src 'self' ${local.managed_cognito_domain}; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'self'; frame-ancestors 'none'"
+      content_security_policy = "default-src 'self'; connect-src 'self' ${local.managed_cognito_domain}${local.import_upload_origin}; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'self'; frame-ancestors 'none'"
       override                = true
     }
     content_type_options {
@@ -779,6 +816,9 @@ resource "aws_cloudfront_distribution" "frontend" {
     cloudfront_default_certificate = true
   }
 
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket_policy" "frontend" {
@@ -808,6 +848,10 @@ resource "aws_s3_bucket" "imports" {
   bucket_prefix = "${var.project_name}-imports-"
   force_destroy = var.import_bucket_force_destroy
   tags          = var.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "imports" {
@@ -1055,4 +1099,179 @@ resource "aws_cloudwatch_metric_alarm" "dynamodb_throttles" {
   alarm_actions       = [aws_sns_topic.erp_ops.arn]
   dimensions          = { TableName = aws_dynamodb_table.erp.name }
   tags                = var.tags
+}
+
+resource "aws_cloudwatch_dashboard" "erp" {
+  dashboard_name = "${var.project_name}-overview"
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type   = "text"
+        x      = 0
+        y      = 0
+        width  = 24
+        height = 2
+        properties = {
+          markdown = "# ${var.project_name} - Functional Observability\nAPI、Lambda、Import、DynamoDB、SQS 與告警狀態集中監控"
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 2
+        width  = 12
+        height = 6
+        properties = {
+          title   = "API Gateway - Traffic / Errors"
+          view    = "timeSeries"
+          region  = var.aws_region
+          stat    = "Sum"
+          period  = 300
+          stacked = false
+          metrics = [
+            ["AWS/ApiGateway", "Count", "ApiId", aws_apigatewayv2_api.http.id, "Stage", "$default", { "label" : "Requests" }],
+            [".", "4XXError", ".", ".", ".", ".", { "label" : "4XX" }],
+            [".", "5XXError", ".", ".", ".", ".", { "label" : "5XX" }]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 2
+        width  = 12
+        height = 6
+        properties = {
+          title   = "API Gateway - Latency (p95/p99)"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
+          stacked = false
+          metrics = [
+            ["AWS/ApiGateway", "Latency", "ApiId", aws_apigatewayv2_api.http.id, "Stage", "$default", { "label" : "Latency p95", "stat" : "p95" }],
+            [".", "Latency", ".", ".", ".", ".", { "label" : "Latency p99", "stat" : "p99" }],
+            [".", "IntegrationLatency", ".", ".", ".", ".", { "label" : "Integration p95", "stat" : "p95" }]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 8
+        width  = 12
+        height = 6
+        properties = {
+          title   = "API Lambda - Invocations / Errors / Duration"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
+          stacked = false
+          metrics = [
+            ["AWS/Lambda", "Invocations", "FunctionName", aws_lambda_function.api.function_name, { "label" : "Invocations", "stat" : "Sum" }],
+            [".", "Errors", ".", ".", { "label" : "Errors", "stat" : "Sum" }],
+            [".", "Duration", ".", ".", { "label" : "Duration p95", "stat" : "p95" }],
+            [".", "Throttles", ".", ".", { "label" : "Throttles", "stat" : "Sum" }]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 8
+        width  = 12
+        height = 6
+        properties = {
+          title   = "Alert Worker - Errors / Duration"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
+          stacked = false
+          metrics = [
+            ["AWS/Lambda", "Invocations", "FunctionName", aws_lambda_function.alert_worker.function_name, { "label" : "Invocations", "stat" : "Sum" }],
+            [".", "Errors", ".", ".", { "label" : "Errors", "stat" : "Sum" }],
+            [".", "Duration", ".", ".", { "label" : "Duration p95", "stat" : "p95" }],
+            [".", "Throttles", ".", ".", { "label" : "Throttles", "stat" : "Sum" }]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 14
+        width  = 12
+        height = 6
+        properties = {
+          title   = "Import Queue / DLQ Health"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
+          stacked = false
+          metrics = var.enable_excel_import ? [
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", aws_sqs_queue.imports[0].name, { "label" : "Import Queue Visible", "stat" : "Maximum" }],
+            [".", "ApproximateAgeOfOldestMessage", ".", ".", { "label" : "Import Queue Oldest Age", "stat" : "Maximum" }],
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", aws_sqs_queue.imports_dlq[0].name, { "label" : "DLQ Visible", "stat" : "Maximum" }],
+            [".", "ApproximateAgeOfOldestMessage", ".", ".", { "label" : "DLQ Oldest Age", "stat" : "Maximum" }]
+          ] : []
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 14
+        width  = 12
+        height = 6
+        properties = {
+          title   = "Import Worker - Errors / Duration"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
+          stacked = false
+          metrics = var.enable_excel_import ? [
+            ["AWS/Lambda", "Invocations", "FunctionName", aws_lambda_function.import_worker[0].function_name, { "label" : "Invocations", "stat" : "Sum" }],
+            [".", "Errors", ".", ".", { "label" : "Errors", "stat" : "Sum" }],
+            [".", "Duration", ".", ".", { "label" : "Duration p95", "stat" : "p95" }],
+            [".", "Throttles", ".", ".", { "label" : "Throttles", "stat" : "Sum" }]
+          ] : []
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 20
+        width  = 12
+        height = 6
+        properties = {
+          title   = "DynamoDB - Throughput / Throttles"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
+          stacked = false
+          metrics = [
+            ["AWS/DynamoDB", "ConsumedReadCapacityUnits", "TableName", aws_dynamodb_table.erp.name, { "label" : "Consumed RCU", "stat" : "Sum" }],
+            [".", "ConsumedWriteCapacityUnits", ".", ".", { "label" : "Consumed WCU", "stat" : "Sum" }],
+            [".", "ThrottledRequests", ".", ".", { "label" : "Throttled Requests", "stat" : "Sum" }],
+            [".", "SystemErrors", ".", ".", { "label" : "System Errors", "stat" : "Sum" }]
+          ]
+        }
+      },
+      {
+        type   = "alarm"
+        x      = 12
+        y      = 20
+        width  = 12
+        height = 6
+        properties = {
+          title = "Operational Alarms"
+          alarms = compact([
+            aws_cloudwatch_metric_alarm.api_errors.arn,
+            aws_cloudwatch_metric_alarm.alert_worker_errors.arn,
+            try(aws_cloudwatch_metric_alarm.import_worker_errors[0].arn, null),
+            try(aws_cloudwatch_metric_alarm.import_dlq_messages[0].arn, null),
+            aws_cloudwatch_metric_alarm.api_gateway_5xx.arn,
+            aws_cloudwatch_metric_alarm.dynamodb_throttles.arn
+          ])
+        }
+      }
+    ]
+  })
 }

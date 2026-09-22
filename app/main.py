@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -35,7 +36,7 @@ from app.erp import (
     ResolveExceptionRequest,
     store,
 )
-from app.imports import create_excel_upload_url
+from app.imports import UPLOAD_URL_TTL_SECONDS, create_excel_upload_url
 from app.repository import IdempotencyConflictError
 
 app = FastAPI(
@@ -261,6 +262,33 @@ def adjust_inventory(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _with_timeout_status(job: dict) -> dict:
+    if job.get("status") == "awaiting_upload":
+        # The presigned URL is already dead, so this job can never move on by itself.
+        try:
+            age = (datetime.now(UTC) - datetime.fromisoformat(job["created_at"])).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            return job
+        if age <= UPLOAD_URL_TTL_SECONDS:
+            return job
+        return {
+            **job,
+            "status": "upload_expired",
+            "errors": job.get("errors")
+            or [{"message": "檔案未在 15 分鐘內送達，請重新上傳。"}],
+        }
+    # A timed-out Lambda is killed before it can record its own failure, so an
+    # expired lease is the only evidence the worker died mid-import.
+    if job.get("status") != "processing" or job.get("lease_until", 0) > time.time():
+        return job
+    return {
+        **job,
+        "status": "timed_out",
+        "errors": job.get("errors")
+        or [{"message": "檔案過大，處理超過 240 秒上限，請拆成較小的檔案。"}],
+    }
+
+
 @app.post("/api/imports/excel/upload-url", response_model=ExcelUploadResponse)
 def create_excel_upload(
     request: ExcelUploadRequest,
@@ -291,7 +319,10 @@ def create_excel_upload(
 def import_jobs(
     actor: Annotated[Actor, Depends(require_roles("purchaser", "admin"))],
 ) -> list[dict]:
-    return store.repository.list_records("import", actor.subject)
+    return [
+        _with_timeout_status(job)
+        for job in store.repository.list_records("import", actor.subject)
+    ]
 
 
 @app.get("/api/imports/excel/jobs/{job_id}")
@@ -300,9 +331,9 @@ def import_job(
     actor: Annotated[Actor, Depends(require_roles("purchaser", "admin"))],
 ) -> dict:
     job = store.repository.get_record("import", job_id)
-    if not job or job["owner"] != actor.subject:
+    if not job or job.get("owner") != actor.subject:
         raise HTTPException(status_code=404, detail="找不到匯入工作")
-    return job
+    return _with_timeout_status(job)
 
 
 @app.post("/api/purchase-orders/{po_id}/exception-resolution", response_model=PurchaseOrder)

@@ -293,7 +293,8 @@ class InMemoryRepository:
     ) -> tuple[list[Any], str | None]:
         items = sorted(
             self.inventory_transactions.values(),
-            key=lambda item: item.transaction_id,
+            key=lambda item: (item.occurred_at, item.transaction_id),
+            reverse=True,
         )
         if material_id:
             items = [item for item in items if item.material_id == material_id]
@@ -560,14 +561,24 @@ class DynamoDbRepository:
         }
 
     @staticmethod
-    def _item(entity: str, key: str, value: Any) -> dict[str, Any]:
+    def _item(entity: str, key: str, value: Any, sort_key: str | None = None) -> dict[str, Any]:
         return {
             "PK": f"{entity}#{key}",
             "SK": "META",
             "entity": entity,
-            "entity_key": key,
+            "entity_key": sort_key or key,
             "data": json.dumps(value.model_dump(mode="json"), ensure_ascii=False),
         }
+
+    @classmethod
+    def _transaction_item(cls, transaction: Any) -> dict[str, Any]:
+        # The ledger is browsed newest first, so the index must sort by time, not by random id.
+        return cls._item(
+            "inventory_transaction",
+            transaction.transaction_id,
+            transaction,
+            sort_key=f"{transaction.occurred_at.isoformat()}#{transaction.transaction_id}",
+        )
 
     @staticmethod
     def _model(item: dict[str, Any], model_name: str) -> Any:
@@ -616,8 +627,11 @@ class DynamoDbRepository:
         expression_attribute_values: dict[str, Any] | None = None,
         predicate: Any | None = None,
         scope: str | None = None,
+        newest_first: bool = False,
     ) -> tuple[list[dict[str, Any]], str | None]:
         kwargs: dict[str, Any] = {"Limit": limit}
+        if newest_first:
+            kwargs["ScanIndexForward"] = False
         decoded = _decode_cursor(cursor)
         if decoded:
             if scope and decoded.get("scope") not in {None, scope}:
@@ -842,6 +856,7 @@ class DynamoDbRepository:
             expression_attribute_names=names,
             expression_attribute_values=values,
             scope=scope,
+            newest_first=True,
         )
         return [self._model(item, "InventoryTransaction") for item in items], next_cursor
 
@@ -950,9 +965,7 @@ class DynamoDbRepository:
                 {
                     "Put": {
                         "TableName": self._table.name,
-                        "Item": self._item(
-                            "inventory_transaction", transaction.transaction_id, transaction
-                        ),
+                        "Item": self._transaction_item(transaction),
                         "ConditionExpression": "attribute_not_exists(PK)",
                     }
                 }
@@ -1031,9 +1044,7 @@ class DynamoDbRepository:
             {
                 "Put": {
                     "TableName": self._table.name,
-                    "Item": self._item(
-                        "inventory_transaction", transaction.transaction_id, transaction
-                    ),
+                    "Item": self._transaction_item(transaction),
                     "ConditionExpression": "attribute_not_exists(PK)",
                 }
             },
@@ -1133,9 +1144,7 @@ class DynamoDbRepository:
                 {
                     "Put": {
                         "TableName": self._table.name,
-                        "Item": self._item(
-                            "inventory_transaction", transaction.transaction_id, transaction
-                        ),
+                        "Item": self._transaction_item(transaction),
                         "ConditionExpression": "attribute_not_exists(PK)",
                     }
                 }

@@ -109,7 +109,9 @@ def handler(event: dict, context: object) -> dict[str, list[dict[str, str]]]:
                 claimed = dict(candidate)
                 # Persist a useful error without exposing SDK credentials or internal responses.
                 message = (
-                    str(error)[:500] if isinstance(error, ValueError) else "匯入失敗，等待重試"
+                    str(error)[:500]
+                    if isinstance(error, ValueError)
+                    else "匯入時發生未預期錯誤，系統會自動重試。"
                 )
                 job.update(
                     status="failed",

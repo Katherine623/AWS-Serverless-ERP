@@ -65,6 +65,7 @@ p { margin: 0; }
 .button.primary { color: #fff; background: var(--deep); }
 .button.secondary { color: var(--teal); background: var(--mint); }
 .button.small { padding: 9px 13px; font-size: 15px; }
+.button.listening { color: #fff; background: var(--amber); }
 
 .panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
 .panel-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding: 20px 22px 15px; border-bottom: 1px solid var(--line); }
@@ -142,6 +143,7 @@ textarea { min-height: 74px; resize: vertical; }
 .transaction { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 13px 18px; border-bottom: 1px solid var(--line); }
 .transaction strong { display: block; margin-bottom: 5px; font-size: 17px; }
 .transaction-meta { color: var(--muted); font-size: 15px; }
+.transaction-amounts { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
 .amount { font-weight: 900; white-space: nowrap; }
 .amount.negative { color: var(--red); }
 .amount.positive { color: var(--teal); }
