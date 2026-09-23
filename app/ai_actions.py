@@ -63,7 +63,8 @@ def cancel_action(identifier, actor):
     record = owned_action(identifier, actor)
     if record["status"] == "cancelled":
         return record
-    if record["status"] != "draft":
+    # A failed execution wrote nothing, so the draft is still safe to withdraw.
+    if record["status"] not in {"draft", "failed"}:
         raise HTTPException(status_code=409, detail="已送出的操作不可直接取消，請查閱執行結果")
     return transition(record, "cancelled")
 

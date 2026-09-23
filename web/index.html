@@ -321,11 +321,10 @@
         <textarea id="aiMessage" maxlength="2000" required placeholder="例如：查詢 MAT-1001 的庫存，並說明是否需要補貨"></textarea>
         <div class="toolbar" aria-label="語音輸入">
           <button id="aiVoice" class="button small secondary" type="button">語音輸入</button>
-          <button id="aiVoicePoMode" class="button small secondary" type="button">語音建立採購單</button>
           <label class="check"><input id="aiVoiceAutoSend" type="checkbox" checked> 說完自動送出</label>
         </div>
-        <p id="aiVoiceStatus" class="help" role="status">按下按鈕後直接說出需求，內容會填進上方輸入框。</p>
-        <p id="aiVoiceChecklist" class="help">選「語音建立採購單」會檢查採購單編號、供應商、預計到貨日、料號、品名、數量是否齊全。</p>
+        <p id="aiVoiceStatus" class="help" role="status">勾選後，語音結束會自動送出。</p>
+        <p id="aiVoiceChecklist" class="help">可先問有哪些待處理項目；確認對象後，再補單號、料號、數量或處置方式。</p>
         <div class="form-actions">
           <button id="aiSend" class="button primary" type="submit">送出問題</button>
         </div>

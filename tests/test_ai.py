@@ -23,6 +23,37 @@ def tool(name, arguments):
     return {"toolUse": {"toolUseId": "tool-1", "name": name, "input": arguments}}
 
 
+def test_sanitize_answer_strips_thinking_and_normalizes_traditional(monkeypatch):
+    monkeypatch.setattr(
+        ai,
+        "TRADITIONAL_CONVERTER",
+        SimpleNamespace(convert=lambda text: text.replace("请", "請").replace("供应商", "供應商")),
+    )
+    result = ai.sanitize_answer("<thinking>internal</thinking>请列出供应商")
+    assert result == "請列出供應商"
+
+
+def test_sanitize_answer_drops_raw_json_blocks(monkeypatch):
+    monkeypatch.setattr(ai, "TRADITIONAL_CONVERTER", None)
+    answer = '請確認以下草稿：\n```json\n{"action": "receive"}\n```'
+    assert ai.sanitize_answer(answer) == "請確認以下草稿："
+
+
+def test_normalize_endpoint_requires_role_and_returns_text(monkeypatch):
+    monkeypatch.setattr(
+        ai,
+        "TRADITIONAL_CONVERTER",
+        SimpleNamespace(convert=lambda text: text.replace("台积电", "台積電")),
+    )
+    app.dependency_overrides[get_current_actor] = lambda: actor("purchaser")
+    try:
+        response = TestClient(app).post("/api/ai/normalize", json={"text": "台积电"})
+        assert response.status_code == 200
+        assert response.json() == {"text": "台積電"}
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_chat_returns_real_read_source(monkeypatch):
     monkeypatch.setenv("ERP_AI_MODEL_ID", "test-model")
     calls = []

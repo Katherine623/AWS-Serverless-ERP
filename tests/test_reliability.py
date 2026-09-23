@@ -301,6 +301,18 @@ def test_ai_cancelled_draft_cannot_execute(store):
     assert store.repository.get_inventory("MAT-1001").quantity == 420
 
 
+def test_ai_failed_draft_can_still_be_cancelled(store):
+    actor = Actor(subject="u", roles=frozenset({"approver"}), claims={})
+    identifier = draft(actor)
+    store.repository.save_record(
+        "ai_action",
+        {**ai_actions.owned_action(identifier, actor), "status": "failed", "lease_until": 0},
+        previous=ai_actions.owned_action(identifier, actor),
+    )
+    assert ai_actions.cancel_action(identifier, actor)["status"] == "cancelled"
+    assert store.repository.get_inventory("MAT-1001").quantity == 420
+
+
 def test_ai_confirmation_rechecks_current_role(store):
     actor = Actor(subject="u", roles=frozenset({"approver"}), claims={})
     identifier = draft(actor)

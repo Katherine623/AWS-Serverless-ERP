@@ -12,7 +12,15 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from mangum import Mangum
 
-from app.ai import ChatRequest, ChatResponse, chat, model_id
+from app.ai import (
+    ChatRequest,
+    ChatResponse,
+    NormalizeTextRequest,
+    NormalizeTextResponse,
+    chat,
+    model_id,
+    normalize_traditional_text,
+)
 from app.ai_actions import cancel_action, execute_action
 from app.auth import Actor, require_roles
 from app.config import get_settings
@@ -63,6 +71,15 @@ def ai_chat(
     actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
 ) -> ChatResponse:
     return chat(request, actor)
+
+
+@app.post("/api/ai/normalize", response_model=NormalizeTextResponse)
+def ai_normalize(
+    request: NormalizeTextRequest,
+    actor: Annotated[Actor, Depends(require_roles(*ERP_READ_ROLES))],
+) -> NormalizeTextResponse:
+    del actor
+    return NormalizeTextResponse(text=normalize_traditional_text(request.text))
 
 
 @app.get("/api/ai/actions")

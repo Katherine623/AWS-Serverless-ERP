@@ -6,3 +6,4 @@ pydantic>=2.9,<3
 uvicorn[standard]>=0.32,<0.34
 mcp>=1.13,<2
 openpyxl>=3.1,<4
+opencc-python-reimplemented>=0.1.7,<1
