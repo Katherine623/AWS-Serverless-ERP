@@ -620,9 +620,19 @@ resource "aws_s3_object" "frontend_index" {
   content_type = "text/html; charset=utf-8"
 }
 
+resource "aws_s3_object" "frontend_favicon" {
+  count        = var.enable_frontend_cdn ? 1 : 0
+  bucket       = aws_s3_bucket.frontend[0].id
+  key          = "favicon.ico"
+  source       = "${path.module}/../web/favicon.ico"
+  etag         = filemd5("${path.module}/../web/favicon.ico")
+  content_type = "image/x-icon"
+}
+
 resource "aws_s3_object" "frontend_assets" {
   for_each = var.enable_frontend_cdn ? setunion(
     fileset("${path.module}/../web", "*.mjs"),
+    fileset("${path.module}/../web", "*.js"),
     fileset("${path.module}/../web", "*.css"),
   ) : toset([])
 

@@ -160,12 +160,31 @@ class ExcelUploadResponse(BaseModel):
     job_id: str = ""
 
 
+class ExceptionItemResolution(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    material_id: str = Field(min_length=1, max_length=80)
+    action: str = Field(pattern="^(補貨|差異允收|超收退回|超收報廢)$")
+
+
 class ResolveExceptionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    action: str = Field(pattern="^(補貨|差異允收結案)$")
+    # `action` applies one decision to the whole order; `items` decides each material separately.
+    action: str | None = Field(
+        default=None, pattern="^(補貨|差異允收結案|超收退回結案|超收報廢結案)$"
+    )
+    items: list[ExceptionItemResolution] = Field(default_factory=list, max_length=48)
     resolved_by: str = Field(min_length=1, max_length=120)
     note: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_single_form(self) -> ResolveExceptionRequest:
+        if bool(self.action) == bool(self.items):
+            raise ValueError("請擇一指定整單處置方式或各料號處置方式")
+        if len({item.material_id for item in self.items}) != len(self.items):
+            raise ValueError("處置清單的料號不可重複")
+        return self
 
 
 class InventoryTransaction(BaseModel):
@@ -230,6 +249,29 @@ RECEIVABLE_STATUSES = {
     PurchaseOrderStatus.PENDING,
     PurchaseOrderStatus.REPLENISHMENT,
 }
+
+# 待補貨 must stay resolvable, otherwise a supplier who never delivers leaves the order stranded.
+RESOLVABLE_STATUSES = {
+    PurchaseOrderStatus.EXCEPTION.value,
+    PurchaseOrderStatus.REPLENISHMENT.value,
+}
+
+REPLENISH_ACTION = "補貨"
+ACCEPT_ACTION = "差異允收"
+OVERAGE_ONLY_ACTIONS = {"超收退回", "超收報廢"}
+# Whole-order shorthand: closing an order also accepts whatever shortfall is left.
+WHOLE_ORDER_ACTIONS = {
+    "補貨": REPLENISH_ACTION,
+    "差異允收結案": ACCEPT_ACTION,
+    "超收退回結案": "超收退回",
+    "超收報廢結案": "超收報廢",
+}
+
+
+# A variance already approved is settled; only the remainder still needs a decision.
+def outstanding_variance(order: PurchaseOrder, item: PurchaseOrderItem) -> int:
+    settled = order.approved_variances.get(item.material_id, 0)
+    return item.received_quantity - item.ordered_quantity + settled
 
 
 class ErpStore:
@@ -513,15 +555,16 @@ class ErpStore:
                 accepted_quantity = min(quantity, max(remaining, 0))
                 # Only the excess delivered now counts; an earlier overage is already recorded.
                 quarantine_quantity = quantity - accepted_quantity
-                if quarantine_quantity:
-                    exceptions.append(
-                        f"{item.material_name} 超收 {quarantine_quantity} {item.unit}"
-                    )
                 item.received_quantity += quantity
-                if item.received_quantity < item.ordered_quantity:
+                # Report the running variance, not just this delivery: an order must not reach a
+                # terminal status while quarantined stock still needs a disposal decision.
+                variance = outstanding_variance(order, item)
+                if variance > 0:
+                    exceptions.append(f"{item.material_name} 超收 {variance} {item.unit}")
+                if variance < 0:
                     exceptions.append(
                         f"{item.material_name} 尚待補貨 "
-                        f"{item.ordered_quantity - item.received_quantity} {item.unit}"
+                        f"{-variance} {item.unit}"
                     )
                 previous_inventory = self.repository.get_inventory(material_id)
                 if previous_inventory:
@@ -634,57 +677,55 @@ class ErpStore:
             order = self.repository.get_purchase_order(po_id)
             if not order:
                 raise PurchaseOrderNotFoundError(f"找不到採購單 {po_id}")
-            if order.status != "待處理異常":
-                raise IdempotencyConflictError(f"採購單 {po_id} 沒有待處理異常")
+            if order.status not in RESOLVABLE_STATUSES:
+                raise IdempotencyConflictError(f"採購單 {po_id} 目前沒有待處置的異常")
             previous_order = order.model_copy(deep=True)
             updated_order = order.model_copy(deep=True)
-            shortage_exists = any(
-                item.received_quantity < item.ordered_quantity for item in updated_order.items
-            )
-            if request.action == "補貨" and not shortage_exists:
-                raise ValueError("目前異常沒有短缺品項，不能選擇補貨")
-            updated_order.status = (
-                PurchaseOrderStatus.REPLENISHMENT.value
-                if request.action == "補貨"
-                else PurchaseOrderStatus.CLOSED.value
-            )
-            updated_order.exception_action = request.action
-            updated_order.exception_resolved_by = request.resolved_by
-            updated_order.exception_note = request.note
-            updated_order.exception_resolved_at = datetime.now(UTC)
+            variances = {
+                item.material_id: outstanding_variance(order, item)
+                for item in updated_order.items
+                if outstanding_variance(order, item) != 0
+            }
+            decisions = self._decisions_for(order, request, variances)
+            resolved_at = datetime.now(UTC)
             inventory_updates: list[tuple[InventoryItem, InventoryItem | None]] = []
             inventory_transactions: list[InventoryTransaction] = []
-            if request.action == "差異允收結案":
-                updated_order.approved_variances = {
-                    item.material_id: item.ordered_quantity - item.received_quantity
-                    for item in updated_order.items
-                    if item.received_quantity != item.ordered_quantity
-                }
-                for item in updated_order.items:
-                    overage = item.received_quantity - item.ordered_quantity
-                    if overage <= 0:
-                        continue
-                    previous_inventory = self.repository.get_inventory(item.material_id)
-                    if not previous_inventory or previous_inventory.quarantine_quantity < overage:
-                        raise ValueError(f"料號 {item.material_id} 的隔離庫存不足，無法允收")
-                    inventory = previous_inventory.model_copy(deep=True)
-                    inventory.quantity += overage
-                    inventory.quarantine_quantity -= overage
-                    inventory.updated_at = updated_order.exception_resolved_at
-                    inventory_updates.append((inventory, previous_inventory))
-                    inventory_transactions.append(
-                        InventoryTransaction(
-                            transaction_id=f"INV-{uuid4().hex[:12].upper()}",
-                            material_id=item.material_id,
-                            material_name=item.material_name,
-                            quantity_change=overage,
-                            transaction_type="差異允收",
-                            reference_id=po_id,
-                            reason=request.note,
-                            performed_by=request.resolved_by,
-                            occurred_at=updated_order.exception_resolved_at,
-                        )
-                    )
+            waiting_replenishment = False
+            for item in updated_order.items:
+                variance = variances.get(item.material_id)
+                if variance is None:
+                    continue
+                action = decisions.get(item.material_id)
+                if action is None:
+                    continue
+                if action == REPLENISH_ACTION:
+                    waiting_replenishment = True
+                    continue
+                updated_order.approved_variances[item.material_id] = (
+                    updated_order.approved_variances.get(item.material_id, 0) - variance
+                )
+                if variance <= 0:
+                    continue
+                inventory_update, transaction = self._dispose_overage(
+                    item, variance, action, request, po_id, resolved_at
+                )
+                inventory_updates.append(inventory_update)
+                inventory_transactions.append(transaction)
+            undecided = any(
+                material_id not in decisions for material_id in variances
+            )
+            if waiting_replenishment:
+                updated_order.status = PurchaseOrderStatus.REPLENISHMENT.value
+            elif undecided:
+                updated_order.status = PurchaseOrderStatus.EXCEPTION.value
+            else:
+                updated_order.status = PurchaseOrderStatus.CLOSED.value
+            updated_order.exception_action = request.action or "；".join(
+                f"{material_id}:{action}" for material_id, action in decisions.items()
+            )
+            updated_order.exception_resolved_by = request.resolved_by
+            updated_order.exception_note = request.note
+            updated_order.exception_resolved_at = resolved_at
             self.repository.save_exception_resolution(
                 updated_order,
                 previous_order,
@@ -692,6 +733,73 @@ class ErpStore:
                 inventory_transactions,
             )
             return updated_order
+
+    def _decisions_for(
+        self,
+        order: PurchaseOrder,
+        request: ResolveExceptionRequest,
+        variances: dict[str, int],
+    ) -> dict[str, str]:
+        if request.items:
+            decisions: dict[str, str] = {}
+            for entry in request.items:
+                variance = variances.get(entry.material_id)
+                if variance is None:
+                    raise ValueError(f"料號 {entry.material_id} 沒有待處置的差異")
+                if entry.action == REPLENISH_ACTION and variance > 0:
+                    raise ValueError(f"料號 {entry.material_id} 是超收，不能選擇補貨")
+                if entry.action in OVERAGE_ONLY_ACTIONS and variance < 0:
+                    raise ValueError(f"料號 {entry.material_id} 是短缺，不能選擇退回或報廢")
+                decisions[entry.material_id] = entry.action
+            return decisions
+
+        if request.action == "補貨":
+            if order.status == PurchaseOrderStatus.REPLENISHMENT.value:
+                raise ValueError("採購單已在待補貨狀態，不需重複選擇補貨")
+            shortages = {mid: REPLENISH_ACTION for mid, value in variances.items() if value < 0}
+            if not shortages:
+                raise ValueError("目前異常沒有短缺品項，不能選擇補貨")
+            return shortages
+
+        disposal = WHOLE_ORDER_ACTIONS[request.action]
+        if disposal in OVERAGE_ONLY_ACTIONS and all(value < 0 for value in variances.values()):
+            raise ValueError("目前異常沒有超收品項，不能選擇退回或報廢")
+        return {
+            material_id: disposal if value > 0 else ACCEPT_ACTION
+            for material_id, value in variances.items()
+        }
+
+    def _dispose_overage(
+        self,
+        item: PurchaseOrderItem,
+        overage: int,
+        action: str,
+        request: ResolveExceptionRequest,
+        po_id: str,
+        resolved_at: datetime,
+    ) -> tuple[tuple[InventoryItem, InventoryItem | None], InventoryTransaction]:
+        previous_inventory = self.repository.get_inventory(item.material_id)
+        if not previous_inventory or previous_inventory.quarantine_quantity < overage:
+            raise ValueError(f"料號 {item.material_id} 的隔離庫存不足，無法執行{action}")
+        inventory = previous_inventory.model_copy(deep=True)
+        inventory.quarantine_quantity -= overage
+        accepted = action == ACCEPT_ACTION
+        if accepted:
+            inventory.quantity += overage
+        inventory.updated_at = resolved_at
+        transaction = InventoryTransaction(
+            transaction_id=f"INV-{uuid4().hex[:12].upper()}",
+            material_id=item.material_id,
+            material_name=item.material_name,
+            quantity_change=overage if accepted else 0,
+            quarantine_quantity_change=-overage,
+            transaction_type=action,
+            reference_id=po_id,
+            reason=request.note,
+            performed_by=request.resolved_by,
+            occurred_at=resolved_at,
+        )
+        return (inventory, previous_inventory), transaction
 
 
 store = ErpStore()

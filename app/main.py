@@ -54,7 +54,7 @@ app = FastAPI(
 )
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
-ASSET_MEDIA_TYPES = {".mjs": "text/javascript", ".css": "text/css"}
+ASSET_MEDIA_TYPES = {".mjs": "text/javascript", ".js": "text/javascript", ".css": "text/css"}
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 logger = logging.getLogger(__name__)
 ERP_READ_ROLES = ("admin", "approver", "purchaser", "warehouse")

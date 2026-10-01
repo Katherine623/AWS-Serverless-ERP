@@ -96,7 +96,267 @@ def test_over_receipt_can_only_be_closed_as_approved_difference() -> None:
     ]
     assert len(approved_transactions) == 1
     assert approved_transactions[0].quantity_change == 2
+    assert approved_transactions[0].quarantine_quantity_change == -2
     assert approved_transactions[0].performed_by == "manager"
+
+
+def over_receive(store: ErpStore, key: str) -> None:
+    make_order(store)
+    store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "TEST-PO-001",
+                "items": [{"material_id": "TEST-MAT-001", "received_quantity": 12}],
+            }
+        ),
+        idempotency_key=key,
+    )
+
+
+@pytest.mark.parametrize(
+    ("action", "transaction_type"),
+    [("超收退回結案", "超收退回"), ("超收報廢結案", "超收報廢")],
+)
+def test_rejected_overage_leaves_quarantine(action: str, transaction_type: str) -> None:
+    store = make_store()
+    over_receive(store, f"over-receipt-{transaction_type}")
+
+    closed = store.resolve_exception(
+        "TEST-PO-001",
+        ResolveExceptionRequest(action=action, resolved_by="manager", note="供應商確認不收"),
+    )
+
+    assert closed.status == "差異結案"
+    inventory = next(item for item in store.list_inventory() if item.material_id == "TEST-MAT-001")
+    assert inventory.quarantine_quantity == 0, "隔離量必須清空，不能永遠卡住"
+    assert inventory.quantity == 10, "退回或報廢不得併入可用庫存"
+    ledger = [
+        transaction
+        for transaction in store.list_inventory_transactions()
+        if transaction.transaction_type == transaction_type
+    ]
+    assert len(ledger) == 1
+    assert ledger[0].quantity_change == 0
+    assert ledger[0].quarantine_quantity_change == -2
+
+
+def test_disposal_requires_an_actual_overage() -> None:
+    store = make_store()
+    make_order(store)
+    store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "TEST-PO-001",
+                "items": [{"material_id": "TEST-MAT-001", "received_quantity": 8}],
+            }
+        ),
+        idempotency_key="short-receipt-001",
+    )
+
+    with pytest.raises(ValueError, match="沒有超收品項"):
+        store.resolve_exception(
+            "TEST-PO-001",
+            ResolveExceptionRequest(
+                action="超收報廢結案", resolved_by="manager", note="誤按"
+            ),
+        )
+
+
+def test_each_material_in_one_order_gets_its_own_decision() -> None:
+    store = make_store()
+    store.create_purchase_order(
+        CreatePurchaseOrderRequest.model_validate(
+            {
+                "po_id": "PER-ITEM-001",
+                "supplier_name": "供應商",
+                "expected_date": "2026-09-30",
+                "items": [
+                    {"material_id": "P-A", "material_name": "A 件", "ordered_quantity": 100},
+                    {"material_id": "P-B", "material_name": "B 件", "ordered_quantity": 50},
+                ],
+            }
+        )
+    )
+    store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "PER-ITEM-001",
+                "items": [
+                    {"material_id": "P-A", "received_quantity": 80},
+                    {"material_id": "P-B", "received_quantity": 60},
+                ],
+            }
+        ),
+        "per-item-001",
+    )
+
+    waiting = store.resolve_exception(
+        "PER-ITEM-001",
+        ResolveExceptionRequest.model_validate(
+            {
+                "items": [
+                    {"material_id": "P-A", "action": "補貨"},
+                    {"material_id": "P-B", "action": "超收退回"},
+                ],
+                "resolved_by": "approver",
+                "note": "A 請補足，B 退回供應商",
+            }
+        ),
+    )
+
+    assert waiting.status == "待補貨"
+    inventory = {item.material_id: item for item in store.list_inventory()}
+    assert inventory["P-B"].quarantine_quantity == 0, "B 的超收應立即退回"
+    assert inventory["P-B"].quantity == 50, "退回的數量不可併入可用庫存"
+
+    completed = store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "PER-ITEM-001",
+                "items": [
+                    {"material_id": "P-A", "received_quantity": 20},
+                    {"material_id": "P-B", "received_quantity": 0},
+                ],
+            }
+        ),
+        "per-item-002",
+    )
+
+    assert completed.exceptions == [], "已處置的超收不可被重複標記"
+    assert completed.status == "已完成"
+
+
+def test_mixed_order_can_accept_one_material_and_reject_another() -> None:
+    store = make_store()
+    store.create_purchase_order(
+        CreatePurchaseOrderRequest.model_validate(
+            {
+                "po_id": "PER-ITEM-002",
+                "supplier_name": "供應商",
+                "expected_date": "2026-09-30",
+                "items": [
+                    {"material_id": "Q-A", "material_name": "A 件", "ordered_quantity": 10},
+                    {"material_id": "Q-B", "material_name": "B 件", "ordered_quantity": 10},
+                ],
+            }
+        )
+    )
+    store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "PER-ITEM-002",
+                "items": [
+                    {"material_id": "Q-A", "received_quantity": 13},
+                    {"material_id": "Q-B", "received_quantity": 14},
+                ],
+            }
+        ),
+        "per-item-003",
+    )
+
+    closed = store.resolve_exception(
+        "PER-ITEM-002",
+        ResolveExceptionRequest.model_validate(
+            {
+                "items": [
+                    {"material_id": "Q-A", "action": "差異允收"},
+                    {"material_id": "Q-B", "action": "超收報廢"},
+                ],
+                "resolved_by": "approver",
+                "note": "A 可用、B 破損報廢",
+            }
+        ),
+    )
+
+    assert closed.status == "差異結案"
+    inventory = {item.material_id: item for item in store.list_inventory()}
+    assert (inventory["Q-A"].quantity, inventory["Q-A"].quarantine_quantity) == (13, 0)
+    assert (inventory["Q-B"].quantity, inventory["Q-B"].quarantine_quantity) == (10, 0)
+
+
+def test_per_item_decision_must_match_the_variance() -> None:
+    store = make_store()
+    make_order(store)
+    store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "TEST-PO-001",
+                "items": [{"material_id": "TEST-MAT-001", "received_quantity": 12}],
+            }
+        ),
+        "per-item-004",
+    )
+
+    with pytest.raises(ValueError, match="是超收，不能選擇補貨"):
+        store.resolve_exception(
+            "TEST-PO-001",
+            ResolveExceptionRequest.model_validate(
+                {
+                    "items": [{"material_id": "TEST-MAT-001", "action": "補貨"}],
+                    "resolved_by": "approver",
+                    "note": "誤選",
+                }
+            ),
+        )
+
+    with pytest.raises(ValueError, match="沒有待處置的差異"):
+        store.resolve_exception(
+            "TEST-PO-001",
+            ResolveExceptionRequest.model_validate(
+                {
+                    "items": [{"material_id": "NOT-IN-PO", "action": "差異允收"}],
+                    "resolved_by": "approver",
+                    "note": "不存在的料號",
+                }
+            ),
+        )
+
+
+def test_resolution_request_requires_exactly_one_form() -> None:
+    with pytest.raises(ValueError, match="請擇一"):
+        ResolveExceptionRequest.model_validate({"resolved_by": "a", "note": "n"})
+    with pytest.raises(ValueError, match="請擇一"):
+        ResolveExceptionRequest.model_validate(
+            {
+                "action": "差異允收結案",
+                "items": [{"material_id": "X", "action": "差異允收"}],
+                "resolved_by": "a",
+                "note": "n",
+            }
+        )
+
+
+def test_replenishment_can_be_closed_when_the_supplier_never_delivers() -> None:
+    store = make_store()
+    make_order(store)
+    store.receive(
+        ReceiptRequest.model_validate(
+            {
+                "po_id": "TEST-PO-001",
+                "items": [{"material_id": "TEST-MAT-001", "received_quantity": 6}],
+            }
+        ),
+        idempotency_key="short-receipt-002",
+    )
+    waiting = store.resolve_exception(
+        "TEST-PO-001",
+        ResolveExceptionRequest(action="補貨", resolved_by="manager", note="等補"),
+    )
+    assert waiting.status == "待補貨"
+
+    with pytest.raises(ValueError, match="不需重複選擇補貨"):
+        store.resolve_exception(
+            "TEST-PO-001",
+            ResolveExceptionRequest(action="補貨", resolved_by="manager", note="再等"),
+        )
+
+    closed = store.resolve_exception(
+        "TEST-PO-001",
+        ResolveExceptionRequest(
+            action="差異允收結案", resolved_by="manager", note="供應商確認不補"
+        ),
+    )
+    assert closed.status == "差異結案", "待補貨必須有結案出口，否則只能偽造收料"
 
 
 def test_failed_alert_delivery_keeps_pending_outbox_batch() -> None:
@@ -230,6 +490,16 @@ def test_replenishment_receipt_does_not_replay_an_earlier_overage() -> None:
     inventory = {item.material_id: item for item in store.list_inventory()}
 
     assert first.exceptions == ["A 件 尚待補貨 20 pcs", "B 件 超收 10 pcs"]
-    assert second.exceptions == []
-    assert second.status == "已完成"
-    assert inventory["MIX-B"].quarantine_quantity == 10
+    assert second.exceptions == ["B 件 超收 10 pcs"]
+    assert second.status == "待處理異常", "隔離量未處置前不可進入終態"
+    assert inventory["MIX-B"].quarantine_quantity == 10, "舊的超收不可被重複計入"
+
+    store.resolve_exception(
+        "PO-MIXED-001",
+        ResolveExceptionRequest.model_validate(
+            {"action": "超收退回結案", "resolved_by": "approver", "note": "退回供應商"}
+        ),
+    )
+    inventory = {item.material_id: item for item in store.list_inventory()}
+    assert inventory["MIX-B"].quarantine_quantity == 0
+    assert inventory["MIX-A"].quantity == 100

@@ -163,6 +163,14 @@ footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 1
 .chat-draft { border: 1px solid var(--amber); padding: 15px; margin-top: 12px; border-radius: 10px; }
 .chat-draft button { margin-right: 8px; }
 
+.scan-bar { display: grid; gap: 6px; margin-top: 10px; }
+.scan-button { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; color: var(--teal); background: var(--mint); border: 1px dashed var(--teal); }
+.scan-button svg { width: 19px; height: 19px; }
+.scan-button.scanning { color: #fff; background: var(--amber); border-style: solid; }
+.scan-camera { font-size: 14px; }
+.scan-code { font-size: 15px; }
+.scan-preview { width: 100%; max-height: 240px; margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; background: #000; object-fit: cover; }
+
 @media (max-width: 1200px) { .kpis { grid-template-columns: repeat(3, 1fr); } }
 
 @media (max-width: 920px) {

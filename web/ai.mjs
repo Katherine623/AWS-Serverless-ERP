@@ -409,8 +409,10 @@ function normalizePoId(text) {
 
 // Never renumber an id the user supplied; only spoken Chinese numerals are converted.
 function formatPoReference(raw) {
-  const source = normalizeBaseText(raw).toUpperCase();
-  const cleaned = source.replace(/^PO/, '').replace(/^[\s:：-]+/, '').replace(/\s+/g, '');
+  const source = normalizeBaseText(raw).toUpperCase().replace(/\s+/g, '');
+  // PO01 and PO-01 can both exist, so an id that already carries the prefix is kept as-is.
+  if (/^PO[A-Z0-9-]+$/.test(source)) return source;
+  const cleaned = source.replace(/^PO[:：-]*/, '');
   if (!cleaned) return '';
   if (/^[A-Z0-9][A-Z0-9-]*$/.test(cleaned)) return `PO-${cleaned}`;
   const spokenNumber = chineseNumberToInt(cleaned);
@@ -474,6 +476,8 @@ function extractAdjustmentType(text) {
 function extractActionValue(text) {
   const source = normalizeBaseText(text);
   if (source.includes('差異允收結案')) return '差異允收結案';
+  if (source.includes('超收退回結案') || source.includes('退回供應商')) return '超收退回結案';
+  if (source.includes('超收報廢結案')) return '超收報廢結案';
   if (source.includes('補貨')) return '補貨';
   return '';
 }

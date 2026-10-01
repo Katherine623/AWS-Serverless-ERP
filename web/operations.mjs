@@ -1,8 +1,10 @@
 import { api, authErrorMessage } from './api.mjs';
 import { clearTokens, decodeClaims, renderActor, session, tokenValue, validToken } from './auth.mjs';
+import { extractScannedPoId, listCameras, scannerUnsupportedMessage, startBarcodeScan } from './scanner.mjs';
 import { $, el, formatDateTime, newKey, replaceRows, setResult } from './ui.mjs';
 
 const RECEIVABLE_STATUSES = ['待驗收', '待補貨'];
+const RESOLVABLE_STATUSES = ['待處理異常', '待補貨'];
 const ACTION_STATUSES = ['待驗收', '待補貨', '待處理異常'];
 const PENDING_KINDS = ['receipt', 'adjustment'];
 // Statuses that prove the request was rejected before it could touch the ledger.
@@ -162,10 +164,16 @@ function statusClass(status) {
   return '';
 }
 
+// Mirrors the backend: a variance already approved is settled and no longer needs a decision.
+function outstandingDifference(order, item) {
+  const settled = Number(order.approved_variances?.[item.material_id] || 0);
+  return Number(item.received_quantity || 0) - Number(item.ordered_quantity || 0) + settled;
+}
+
 function orderStatusHint(order) {
   const savedReasons = Array.isArray(order.exception_reasons) ? order.exception_reasons.filter(Boolean) : [];
   const inferredReasons = (order.items || []).flatMap(item => {
-    const difference = Number(item.received_quantity || 0) - Number(item.ordered_quantity || 0);
+    const difference = outstandingDifference(order, item);
     if (difference > 0) return [`${item.material_name} 超收 ${difference} ${item.unit || 'pcs'}`];
     if (difference < 0) return [`${item.material_name} 尚待補貨 ${Math.abs(difference)} ${item.unit || 'pcs'}`];
     return [];
@@ -340,7 +348,7 @@ function populateActions() {
     material: $('adjustmentMaterial').value,
   };
   const receivable = state.allOrders.filter(order => RECEIVABLE_STATUSES.includes(order.status));
-  const exceptions = state.allOrders.filter(order => order.status === '待處理異常');
+  const exceptions = state.allOrders.filter(order => RESOLVABLE_STATUSES.includes(order.status));
 
   $('receiptPo').replaceChildren(
     ...(receivable.length
@@ -349,8 +357,8 @@ function populateActions() {
   );
   $('resolutionPo').replaceChildren(
     ...(exceptions.length
-      ? exceptions.map(order => option(order.po_id, `${order.po_id} · ${order.supplier_name}`))
-      : [option('', '目前沒有待處理異常')]),
+      ? exceptions.map(order => option(order.po_id, `${order.po_id} · ${order.supplier_name} · ${order.status}`))
+      : [option('', '目前沒有待處置的採購單')]),
   );
   $('adjustmentMaterial').replaceChildren(
     ...(state.inventory.length
@@ -368,7 +376,143 @@ function populateActions() {
   if (state.inventory.some(item => item.material_id === selected.material)) {
     $('adjustmentMaterial').value = selected.material;
   }
+  syncResolutionActions();
   renderReceiptItems();
+}
+
+const SHORTAGE_ACTIONS = [['補貨', '補貨（等供應商補送）'], ['差異允收', '差異允收（接受短缺結案）']];
+const OVERAGE_ACTIONS = [
+  ['差異允收', '差異允收（併入可用庫存）'],
+  ['超收退回', '超收退回（退回供應商）'],
+  ['超收報廢', '超收報廢'],
+];
+
+// Each material in one order can need a different decision, so render one row per variance.
+function syncResolutionActions() {
+  const order = state.allOrders.find(item => item.po_id === $('resolutionPo').value);
+  const rows = (order?.items || []).flatMap(item => {
+    const difference = outstandingDifference(order, item);
+    if (!difference) return [];
+    const unit = item.unit || 'pcs';
+    const selectId = `resolution-${item.material_id}`;
+    const choices = difference < 0 ? SHORTAGE_ACTIONS : OVERAGE_ACTIONS;
+    return [
+      el('label', {
+        for: selectId,
+        textContent: difference < 0
+          ? `${item.material_name} · 短缺 ${-difference} ${unit}`
+          : `${item.material_name} · 超收 ${difference} ${unit}`,
+      }),
+      el(
+        'select',
+        { id: selectId, className: 'resolution-action', dataset: { material: item.material_id } },
+        ...choices.map(([value, text]) => option(value, text)),
+      ),
+    ];
+  });
+  $('resolutionItems').replaceChildren(
+    ...(rows.length
+      ? rows
+      : [el('p', { className: 'help', textContent: '這張採購單目前沒有待處置的差異。' })]),
+  );
+  $('resolutionSubmit').disabled = !rows.length;
+}
+
+function receivableOptionValues() {
+  return [...$('receiptPo').options].map(option => option.value).filter(Boolean);
+}
+
+function initReceiptScanner() {
+  const button = $('receiptScan');
+  const label = $('receiptScanLabel');
+  const picker = $('receiptScanCamera');
+  const code = $('receiptScanCode');
+  const preview = $('receiptScanPreview');
+  const status = $('receiptScanStatus');
+
+  const applyScannedCode = raw => {
+    const scanned = extractScannedPoId(raw);
+    const options = receivableOptionValues();
+    // Resolve against the real list rather than reshaping the id; fall back to a loose
+    // comparison only when it points at exactly one order.
+    const loose = value => value.replace(/[^A-Z0-9]/g, '');
+    const matches = options.includes(scanned)
+      ? [scanned]
+      : options.filter(option => loose(option) === loose(scanned));
+    if (matches.length !== 1) {
+      status.textContent = matches.length
+        ? `讀到 ${scanned} 同時對應 ${matches.join('、')}，請直接從上方清單選擇。`
+        : `讀到 ${scanned}，但它不在可驗收清單中，請確認採購單狀態。`;
+      return false;
+    }
+    $('receiptPo').value = matches[0];
+    renderReceiptItems();
+    status.textContent = `已帶入採購單 ${matches[0]}，請確認各品項數量後送出。`;
+    return true;
+  };
+
+  // Barcode guns type the value and press Enter, which would otherwise submit the receipt form.
+  code.addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const value = code.value.trim();
+    if (value && applyScannedCode(value)) code.value = '';
+  });
+
+  const unsupported = scannerUnsupportedMessage();
+  if (unsupported) {
+    button.disabled = true;
+    status.textContent = unsupported;
+    return;
+  }
+
+  // Only one camera means there is nothing to switch between.
+  const refreshCameras = async () => {
+    picker.hidden = (await listCameras()).length < 2;
+  };
+  refreshCameras();
+
+  let stop = null;
+  const finish = message => {
+    stop?.();
+    stop = null;
+    preview.hidden = true;
+    button.classList.remove('scanning');
+    label.textContent = '掃描條碼帶入採購單';
+    status.textContent = message;
+  };
+
+  const start = async () => {
+    button.disabled = true;
+    try {
+      stop = await startBarcodeScan({
+        video: preview,
+        facing: picker.value,
+        onError: message => { status.textContent = message; },
+        onDetected: raw => {
+          if (applyScannedCode(raw)) finish(status.textContent);
+        },
+      });
+      preview.hidden = false;
+      button.classList.add('scanning');
+      label.textContent = '停止掃描';
+      status.textContent = '請將條碼對準相機。';
+      refreshCameras();
+    } catch (error) {
+      finish(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  button.addEventListener('click', () => (stop ? finish('已停止掃描。') : start()));
+
+  // The device is fixed when the stream opens, so switching lenses has to reopen it.
+  picker.addEventListener('change', () => {
+    if (!stop) return;
+    finish('正在切換鏡頭…');
+    start();
+  });
 }
 
 function renderReceiptItems() {
@@ -585,6 +729,8 @@ function bindEvents() {
 
   $('actionMore').addEventListener('click', () => guard('receiptResult', loadActionOrders(false)));
   $('receiptPo').addEventListener('change', renderReceiptItems);
+  $('resolutionPo').addEventListener('change', syncResolutionActions);
+  initReceiptScanner();
   $('excelFile').addEventListener('change', () => {
     $('fileName').textContent = $('excelFile').files[0]?.name || '尚未選擇檔案';
   });
@@ -653,7 +799,10 @@ function bindEvents() {
           {
             method: 'POST',
             body: {
-              action: $('resolutionAction').value,
+              items: [...document.querySelectorAll('.resolution-action')].map(select => ({
+                material_id: select.dataset.material,
+                action: select.value,
+              })),
               resolved_by: decodeClaims(tokenValue()).sub || '登入使用者',
               note: $('resolutionNote').value.trim(),
             },

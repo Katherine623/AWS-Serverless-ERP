@@ -158,7 +158,8 @@ def chat(request: ChatRequest, actor: Actor) -> ChatResponse:
             "receive: po_id,items[{material_id,received_quantity}]；"
             "adjust_inventory: material_id,quantity_change,"
             "adjustment_type(盤點調整/退貨/報廢),reason；"
-            "resolve_exception: 外層 po_id，payload {action(補貨/差異允收結案),note}。"
+            "resolve_exception: 外層 po_id，payload {action(補貨/差異允收結案/"
+            "超收退回結案/超收報廢結案),note}。"
         ),
         "inputSchema": {"json": DraftRequest.model_json_schema()},
     }})
